@@ -1,8 +1,4 @@
-mod ddc;
-mod inject;
-mod probe;
-mod server;
-mod slider;
+use brighttray::{ddc, inject, probe, server, slider};
 
 use std::process::ExitCode;
 
@@ -129,8 +125,8 @@ fn main() -> ExitCode {
             }
             for (i, m) in monitors.iter().enumerate() {
                 match m.brightness() {
-                    Some(b) => println!("[{i}] {}: {}/{}", m.description, b.current, b.max),
-                    None => println!("[{i}] {}: DDC/CI brightness not available", m.description),
+                    Some(b) => println!("[{i}] {}: {}/{}", m.name, b.current, b.max),
+                    None => println!("[{i}] {}: DDC/CI brightness not available", m.name),
                 }
             }
             ExitCode::SUCCESS
@@ -147,10 +143,10 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             };
             if m.set_brightness_percent(percent) {
-                println!("[{index}] {} -> {}%", m.description, percent.min(100));
+                println!("[{index}] {} -> {}%", m.name, percent.min(100));
                 ExitCode::SUCCESS
             } else {
-                eprintln!("[{index}] {}: failed to set brightness", m.description);
+                eprintln!("[{index}] {}: failed to set brightness", m.name);
                 ExitCode::FAILURE
             }
         }

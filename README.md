@@ -48,6 +48,7 @@ BrightTray 把这两头接了起来：
 | | |
 |---|---|
 | 🎚️ **原生体验** | 直接复用快速设置里的系统亮度条，没有额外窗口，也没有第三方 UI |
+| 🪟 **桌面应用** | Mica 质感的设置窗口：选择显示器、一键应用、开机自启，关闭后常驻托盘 |
 | 🖥️ **DDC/CI 直连** | 通过 `dxva2` 物理显示器 API 读写 VCP `0x10`（亮度），按显示器自身量程换算百分比 |
 | 🔁 **双向同步** | 外部改了亮度（OSD、其他工具）会回写到滑块；拖动后 1.2 秒内忽略回读，滑块不会"往回弹" |
 | ⚡ **合并写入** | DDC/CI 单条命令约 50 ms，连续拖动产生的写入只保留最新值，不排长队 |
@@ -77,14 +78,36 @@ cargo build --release
 产物位于 `target\release\`：
 
 ```text
-brighttray-helper.exe   # 常驻进程：DDC/CI、命名管道、注入器
+BrightTray.exe          # 桌面应用：选择显示器、托盘、开机自启
+brighttray-helper.exe   # 命令行版本：调试、脚本、无界面常驻
 brighttray_hook.dll     # 注入 ShellHost.exe 的 hook
 ```
 
 > [!IMPORTANT]
-> 两个文件必须放在**同一目录**，helper 默认从自身旁边加载 `brighttray_hook.dll`。
+> `brighttray_hook.dll` 必须和 `BrightTray.exe` / `brighttray-helper.exe` 放在**同一目录**，程序默认从自身旁边加载它。
 
-### 运行
+### 使用桌面应用（推荐）
+
+<div align="center">
+  <img src="docs/screenshots/app.png" alt="BrightTray 桌面应用" width="400">
+</div>
+
+1. 运行 `BrightTray.exe`，窗口会列出所有已连接的显示器，并标出是否支持 DDC/CI 和当前亮度。
+2. 选中要控制的显示器。如果它**不支持 DDC/CI**，BrightTray 只会给出提示，不会做任何修改。
+3. 点击 **应用**，BrightTray 才开始工作：启动后台服务并挂接快速设置。
+4. 按 <kbd>Win</kbd> + <kbd>A</kbd>，亮度条就会出现在音量滑块旁边。
+
+| 选项 | 说明 |
+|---|---|
+| 开机自启动 | 写入当前用户的 `Run` 启动项。登录后直接在托盘中运行，并自动控制上次应用的显示器 |
+| 关闭时最小化到托盘 | 默认开启。点击关闭按钮只会隐藏窗口，可从托盘图标重新打开，或在托盘菜单中选择"退出" |
+
+设置保存在 `%APPDATA%\BrightTray\config.ini`。程序只允许运行一个实例，再次启动会把已有窗口调到前台。
+
+> [!NOTE]
+> 桌面应用依赖 WebView2 运行时，Windows 11 已自带。
+
+### 使用命令行
 
 ```powershell
 # 1) 先确认显示器支持 DDC/CI
@@ -94,7 +117,7 @@ target\release\brighttray-helper.exe list
 target\release\brighttray-helper.exe serve
 ```
 
-然后按 <kbd>Win</kbd> + <kbd>A</kbd>，亮度条就会出现在音量滑块旁边。
+`serve` 会控制所有支持 DDC/CI 的显示器。它与桌面应用共用同一个管道名，两者不能同时运行。
 
 <div align="center">
   <img src="docs/screenshots/demo.png" alt="拖动亮度条调节外接显示器" width="720">
@@ -214,14 +237,14 @@ BrightTray 通过 `CreateRemoteThread(LoadLibraryW)` 把 DLL 注入 `ShellHost.e
 <details>
 <summary><b>多台显示器怎么处理？</b></summary>
 
-快速设置的亮度条会通过 `setall` 同步调节**所有**支持 DDC/CI 的显示器；读取时以第一台支持 DDC/CI 的显示器为准。需要单独调节时，可以用 `set <index> <p>` 或管道协议。
+桌面应用中，快速设置的亮度条只控制你选中并应用的那台显示器，可以随时切换。命令行 `serve` 则通过 `setall` 同步调节**所有**支持 DDC/CI 的显示器，读取时以第一台为准。需要单独调节时，可以用 `set <index> <p>` 或管道协议。
 
 </details>
 
 <details>
 <summary><b>如何卸载？</b></summary>
 
-结束 `brighttray-helper.exe`，然后重启 ShellHost（或注销 / 重启系统）即可。BrightTray 不修改注册表，也不改动任何系统文件。
+在托盘菜单中选择"退出"（或结束 `brighttray-helper.exe`），关闭"开机自启动"，然后重启 ShellHost（或注销 / 重启系统）即可。BrightTray 不修改注册表，也不改动任何系统文件。
 
 </details>
 
@@ -238,8 +261,8 @@ BrightTray 通过 `CreateRemoteThread(LoadLibraryW)` 把 DLL 注入 `ShellHost.e
 - [x] 快速设置亮度条注入（`IQuickAction` hook）
 - [x] 外部亮度变化回写 UI
 - [x] ShellHost 重启后自动重注入
-- [ ] 托盘图标与右键菜单
-- [ ] 开机自启（无控制台窗口）
+- [x] 桌面应用：显示器选择、托盘图标与右键菜单
+- [x] 开机自启（无控制台窗口）
 - [ ] 多显示器独立滑块
 - [ ] 安装包与签名发布
 
@@ -247,8 +270,16 @@ BrightTray 通过 `CreateRemoteThread(LoadLibraryW)` 把 DLL 注入 `ShellHost.e
 
 ```text
 BrightTray/
-├── helper/                 # brighttray-helper.exe
+├── app/                    # BrightTray.exe 桌面应用
+│   ├── src/
+│   │   ├── main.rs         # 窗口、WebView、托盘、状态管理
+│   │   ├── autostart.rs    # 开机自启（HKCU Run）
+│   │   ├── config.rs       # 设置持久化
+│   │   └── instance.rs     # 单实例
+│   └── ui/index.html       # 界面
+├── helper/                 # brighttray 核心库 + brighttray-helper.exe
 │   └── src/
+│       ├── lib.rs          # 供 app 复用的核心库
 │       ├── main.rs         # 命令行入口
 │       ├── ddc.rs          # DDC/CI 物理显示器访问
 │       ├── server.rs       # 命名管道服务与写入合并

@@ -1,0 +1,2 @@
+// Icon ordinal 1 is used for the exe, the window and the tray icon.
+1 ICON "../assets/icon.ico"

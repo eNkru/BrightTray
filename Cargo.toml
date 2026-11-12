@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["helper", "hook"]
+members = ["helper", "hook", "app"]
 
 [profile.release]
 opt-level = "s"
