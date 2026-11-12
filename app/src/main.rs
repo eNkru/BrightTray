@@ -25,6 +25,8 @@ use wry::{WebView, WebViewBuilder};
 use config::Config;
 
 const ICON_RESOURCE: u16 = 1;
+/// How many 3-second rescans a logon start waits for the saved monitor (about 30 s).
+const RESUME_ATTEMPTS: u32 = 10;
 const UI: &str = include_str!("../ui/index.html");
 const ICON_SVG: &str = include_str!("../../assets/icon.svg");
 
@@ -32,6 +34,7 @@ const ICON_SVG: &str = include_str!("../../assets/icon.svg");
 enum UserEvent {
     Ipc(String),
     Scanned(Vec<MonitorView>),
+    Rescan,
     Watch(WatchEvent),
     Show,
     Menu(MenuEvent),
@@ -78,6 +81,10 @@ struct App {
     mica: bool,
     /// Launched by the Run key: resume the saved monitor once the first scan is in.
     resume_pending: bool,
+    /// Rescans spent waiting for the saved monitor after logon (DisplayPort monitors can take
+    /// a few seconds to appear after wake).
+    resume_attempts: u32,
+    last_scan: Option<std::time::Instant>,
     show_id: MenuId,
     quit_id: MenuId,
 }
@@ -133,6 +140,7 @@ impl App {
             return;
         }
         self.scanning = true;
+        self.last_scan = Some(std::time::Instant::now());
         self.push_state();
         let proxy = self.proxy.clone();
         std::thread::spawn(move || {
@@ -381,6 +389,8 @@ fn main() {
         error: None,
         mica: false,
         resume_pending: started_by_logon,
+        resume_attempts: 0,
+        last_scan: None,
         show_id: show_item.id().clone(),
         quit_id: quit_item.id().clone(),
     };
@@ -403,6 +413,13 @@ fn main() {
                         *control_flow = ControlFlow::Exit;
                     }
                 }
+                // Monitors come and go (sleep, hot-plug, remote sessions): refresh when the
+                // user comes back to the window, at most every few seconds.
+                WindowEvent::Focused(true) => {
+                    if app.last_scan.is_none_or(|t| t.elapsed().as_secs() >= 3) {
+                        app.scan();
+                    }
+                }
                 WindowEvent::ThemeChanged(_) => {
                     app.apply_backdrop();
                     app.push_state();
@@ -419,11 +436,25 @@ fn main() {
                     app.monitors = monitors;
                     app.scanning = false;
                     if app.resume_pending {
-                        app.resume_pending = false;
                         match app.find_saved().filter(|m| m.ddc()).map(|m| m.key.clone()) {
-                            Some(key) => app.apply(&key),
+                            Some(key) => {
+                                app.resume_pending = false;
+                                app.apply(&key);
+                            }
+                            // Right after logon the monitor may still be waking up.
+                            None if app.config.monitor_key.is_some()
+                                && app.resume_attempts < RESUME_ATTEMPTS =>
+                            {
+                                app.resume_attempts += 1;
+                                let proxy = app.proxy.clone();
+                                std::thread::spawn(move || {
+                                    std::thread::sleep(std::time::Duration::from_secs(3));
+                                    let _ = proxy.send_event(UserEvent::Rescan);
+                                });
+                            }
                             // Nothing to resume: ask the user instead of idling invisibly.
                             None => {
+                                app.resume_pending = false;
                                 if app.config.monitor_key.is_some() {
                                     app.error =
                                         Some("上次应用的显示器当前不可用，请重新选择。".into());
@@ -438,6 +469,7 @@ fn main() {
                     app.hook = Hook::Event(event);
                     app.push_state();
                 }
+                UserEvent::Rescan => app.scan(),
                 UserEvent::Show => app.show(),
                 UserEvent::Menu(event) => {
                     if event.id == app.quit_id {
