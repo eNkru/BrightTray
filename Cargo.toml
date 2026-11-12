@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["helper", "hook"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
