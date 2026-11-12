@@ -122,9 +122,6 @@ struct QuickState {
 
 static STATE: OnceLock<State> = OnceLock::new();
 static QUICK_STATE: OnceLock<QuickState> = OnceLock::new();
-/// QuickSetting instances that have been confirmed to be the brightness setting. The vtable is
-/// shared by WiFi/Bluetooth/etc. as well, so every hook must forward those instances untouched.
-static BRIGHTNESS_INSTANCES: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
 /// Last brightness in percent. GetValue must be cheap and non-blocking; the helper is queried
 /// asynchronously and the result is published here.
 static CACHED_PERCENT: AtomicU32 = AtomicU32::new(PIPE_FALLBACK_PERCENT);
@@ -194,17 +191,12 @@ unsafe fn free_hstring(raw: *mut c_void) {
 
 /// True only for the brightness QuickSetting instance. The QuickSetting vtable is shared by
 /// every tile, so the other tiles must be allowed to run their real methods.
+///
+/// The identity is asked every time instead of being cached by address: a freed brightness
+/// object's address can be reused by another tile, which would then be hijacked.
 unsafe fn is_brightness_instance(this: *mut c_void) -> bool {
     if this.is_null() {
         return false;
-    }
-    let cache = BRIGHTNESS_INSTANCES.get_or_init(|| Mutex::new(HashSet::new()));
-    if cache
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .contains(&(this as usize))
-    {
-        return true;
     }
     let Some(state) = QUICK_STATE.get() else {
         return false;
@@ -218,14 +210,7 @@ unsafe fn is_brightness_instance(this: *mut c_void) -> bool {
     free_hstring(id);
     let matches = id_text.eq_ignore_ascii_case(SETTING_ID);
     if matches {
-        cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(this as usize);
-        log(format!(
-            "identified brightness QuickSetting instance 0x{:X}",
-            this as usize
-        ));
+        log_property("identified brightness QuickSetting", &format!("{this:p}"));
     }
     matches
 }
@@ -936,16 +921,20 @@ unsafe fn try_install_quick_actions() -> Result<(), String> {
     if hr.is_err() || returned_id.is_null() {
         return Err(format!("quick action get_Id -> 0x{:08X}", hr.0 as u32));
     }
-    let returned_id = hstring_to_string(returned_id).unwrap_or_default();
-    if !returned_id.eq_ignore_ascii_case(SETTING_ID) {
-        return Err(format!("unexpected quick action id {returned_id:?}"));
+    // QuickSetting::get_Id is a WindowsDuplicateString wrapper: the caller owns the result.
+    let returned_id_text = hstring_to_string(returned_id).unwrap_or_default();
+    free_hstring(returned_id);
+    if !returned_id_text.eq_ignore_ascii_case(SETTING_ID) {
+        return Err(format!("unexpected quick action id {returned_id_text:?}"));
     }
 
     let get_friendly: GetIdFn = std::mem::transmute(*vtable.add(QA_SLOT_GET_FRIENDLY_NAME));
     let mut returned_friendly: *mut c_void = std::ptr::null_mut();
     let hr = get_friendly(action, &mut returned_friendly);
     if hr.is_ok() && !returned_friendly.is_null() {
-        let returned_friendly = hstring_to_string(returned_friendly).unwrap_or_default();
+        let friendly_raw = returned_friendly;
+        let returned_friendly = hstring_to_string(friendly_raw).unwrap_or_default();
+        free_hstring(friendly_raw);
         if !returned_friendly.eq_ignore_ascii_case(QUICK_ACTION_NAME) {
             return Err(format!(
                 "unexpected quick action friendly name {returned_friendly:?}"
@@ -955,15 +944,29 @@ unsafe fn try_install_quick_actions() -> Result<(), String> {
 
     if QUICK_STATE.get().is_none() {
         let state = QuickState {
-            original_get_id: std::mem::transmute(*vtable.add(QA_SLOT_GET_ID)),
-            original_is_applicable: std::mem::transmute(*vtable.add(QA_SLOT_IS_APPLICABLE)),
-            original_is_enabled: std::mem::transmute(*vtable.add(QA_SLOT_IS_ENABLED)),
-            original_status: std::mem::transmute(*vtable.add(QA_SLOT_STATUS)),
-            original_is_active: std::mem::transmute(*vtable.add(QA_SLOT_IS_ACTIVE)),
-            original_get_value: std::mem::transmute(*vtable.add(QA_SLOT_GET_VALUE)),
-            original_set_value: std::mem::transmute(*vtable.add(QA_SLOT_SET_VALUE)),
-            original_add_handler: std::mem::transmute(*vtable.add(QA_SLOT_ADD_HANDLER)),
-            original_remove_handler: std::mem::transmute(*vtable.add(QA_SLOT_REMOVE_HANDLER)),
+            original_get_id: std::mem::transmute::<usize, GetIdFn>(*vtable.add(QA_SLOT_GET_ID)),
+            original_is_applicable: std::mem::transmute::<usize, GetBoolFn>(
+                *vtable.add(QA_SLOT_IS_APPLICABLE),
+            ),
+            original_is_enabled: std::mem::transmute::<usize, GetBoolFn>(
+                *vtable.add(QA_SLOT_IS_ENABLED),
+            ),
+            original_status: std::mem::transmute::<usize, GetIdFn>(*vtable.add(QA_SLOT_STATUS)),
+            original_is_active: std::mem::transmute::<usize, GetBoolFn>(
+                *vtable.add(QA_SLOT_IS_ACTIVE),
+            ),
+            original_get_value: std::mem::transmute::<usize, GetValueFn>(
+                *vtable.add(QA_SLOT_GET_VALUE),
+            ),
+            original_set_value: std::mem::transmute::<usize, SetValueFn>(
+                *vtable.add(QA_SLOT_SET_VALUE),
+            ),
+            original_add_handler: std::mem::transmute::<usize, AddHandlerFn>(
+                *vtable.add(QA_SLOT_ADD_HANDLER),
+            ),
+            original_remove_handler: std::mem::transmute::<usize, RemoveHandlerFn>(
+                *vtable.add(QA_SLOT_REMOVE_HANDLER),
+            ),
             handlers: Mutex::new(Vec::new()),
         };
         let _ = QUICK_STATE.set(state);
@@ -1051,33 +1054,32 @@ unsafe fn try_install() -> Result<(), String> {
         return Err(format!("unexpected setting id {returned_id_text:?}"));
     }
 
-    let initial_percent = pipe::get_all().unwrap_or(PIPE_FALLBACK_PERCENT);
-    CACHED_PERCENT.store(initial_percent, Ordering::Relaxed);
     log(format!(
-        "validated {SETTING_ID}: module=0x{base:X} vtable=0x{:X} initial={initial_percent}%",
+        "validated {SETTING_ID}: module=0x{base:X} vtable=0x{:X}",
         vtable as usize
     ));
 
     if STATE.get().is_none() {
         let state = State {
-            original_get_value: std::mem::transmute(*vtable.add(SLOT_GET_VALUE)),
-            original_set_value: std::mem::transmute(*vtable.add(SLOT_SET_VALUE)),
-            original_add_handler: std::mem::transmute(*vtable.add(SLOT_ADD_HANDLER)),
-            original_remove_handler: std::mem::transmute(*vtable.add(SLOT_REMOVE_HANDLER)),
+            original_get_value: std::mem::transmute::<usize, GetValueFn>(
+                *vtable.add(SLOT_GET_VALUE),
+            ),
+            original_set_value: std::mem::transmute::<usize, SetValueFn>(
+                *vtable.add(SLOT_SET_VALUE),
+            ),
+            original_add_handler: std::mem::transmute::<usize, AddHandlerFn>(
+                *vtable.add(SLOT_ADD_HANDLER),
+            ),
+            original_remove_handler: std::mem::transmute::<usize, RemoveHandlerFn>(
+                *vtable.add(SLOT_REMOVE_HANDLER),
+            ),
             handlers: Mutex::new(Vec::new()),
         };
         let _ = STATE.set(state);
     }
 
-    pin_self();
     patch_vtable(vtable)?;
     log("ISettingItem hook installed: IsEnabled/IsApplicable/GetValue/SetValue/SettingChanged");
-    match try_install_quick_actions() {
-        Ok(()) => {}
-        Err(e) => log(format!("QuickActions hook not installed: {e}")),
-    }
-    start_watcher();
-    signal_ready();
     Ok(())
 }
 
@@ -1091,25 +1093,68 @@ unsafe fn signal_ready() {
     }
 }
 
+const INSTALL_ATTEMPTS: u32 = 30;
+
+/// Installs both hooks independently. The `IQuickAction` hook is the one that makes the Quick
+/// Settings slider appear; the `ISettingItem` hook is a compatibility layer. Neither waits for
+/// the other, and each is retried on its own until it succeeds or the attempts run out.
 fn install() {
     unsafe {
         let init = RoInitialize(RO_INIT_MULTITHREADED);
         if let Err(e) = &init {
             log(format!("RoInitialize(MTA) -> {e} (continuing)"));
         }
-        for attempt in 1..=30 {
-            match try_install() {
-                Ok(()) => return,
-                Err(e) => {
-                    if attempt == 1 || attempt % 5 == 0 {
-                        log(format!("install attempt {attempt}/30 failed: {e}"));
-                    }
-                    std::thread::sleep(std::time::Duration::from_secs(1));
+        // Must happen before any vtable points into this module.
+        pin_self();
+        if let Some(percent) = pipe::get_all() {
+            CACHED_PERCENT.store(percent, Ordering::Relaxed);
+        }
+
+        let mut settings_done = false;
+        let mut quick_done = false;
+        let mut signalled = false;
+        for attempt in 1..=INSTALL_ATTEMPTS {
+            let report = attempt == 1 || attempt % 5 == 0;
+            if !settings_done {
+                match try_install() {
+                    Ok(()) => settings_done = true,
+                    Err(e) if report => log(format!(
+                        "ISettingItem attempt {attempt}/{INSTALL_ATTEMPTS} failed: {e}"
+                    )),
+                    Err(_) => {}
                 }
             }
+            if !quick_done {
+                match try_install_quick_actions() {
+                    Ok(()) => quick_done = true,
+                    Err(e) if report => log(format!(
+                        "IQuickAction attempt {attempt}/{INSTALL_ATTEMPTS} failed: {e}"
+                    )),
+                    Err(_) => {}
+                }
+            }
+            if settings_done || quick_done {
+                start_watcher();
+            }
+            // The early injector only cares about the hook that feeds Quick Settings.
+            if quick_done && !signalled {
+                signal_ready();
+                signalled = true;
+            }
+            if settings_done && quick_done {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
         }
-        log("giving up after 30 install attempts");
-        signal_ready();
+        if !settings_done {
+            log("giving up on the ISettingItem hook");
+        }
+        if !quick_done {
+            log("giving up on the IQuickAction hook");
+        }
+        if !signalled {
+            signal_ready();
+        }
     }
 }
 

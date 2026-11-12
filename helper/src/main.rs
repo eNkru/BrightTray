@@ -87,7 +87,9 @@ fn main() -> ExitCode {
         // across ShellHost restarts. Set BRIGHTTRAY_NO_HOOK=1 to disable that.
         if std::env::var_os("BRIGHTTRAY_NO_HOOK").is_none() {
             match inject::default_dll_path() {
-                Ok(dll) => inject::watch_and_inject(dll),
+                Ok(dll) => {
+                    inject::watch_and_inject(dll, |event| eprintln!("hook watcher: {event}"))
+                }
                 Err(e) => eprintln!("hook watcher: {e}"),
             }
         }

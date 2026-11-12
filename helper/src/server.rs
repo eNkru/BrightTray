@@ -15,8 +15,8 @@ use std::os::windows::io::FromRawHandle;
 use std::sync::mpsc::{channel, Receiver, Sender};
 
 use windows::core::w;
-use windows::Win32::Foundation::{ERROR_PIPE_CONNECTED, INVALID_HANDLE_VALUE};
-use windows::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
+use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_PIPE_CONNECTED, INVALID_HANDLE_VALUE};
+use windows::Win32::Storage::FileSystem::{FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX};
 use windows::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
     PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
@@ -68,10 +68,19 @@ fn worker(rx: Receiver<Cmd>) {
                     let _ = reply.send(line);
                 }
                 Cmd::GetAll(reply) => {
-                    flush(&mut monitors, &mut pending);
+                    if flush(&mut monitors, &mut pending) {
+                        capable = None;
+                    }
+                    // The hook polls this; skip monitors already known not to answer so each
+                    // poll does not pay their retry delay.
+                    let capable = capable.get_or_insert_with(|| {
+                        monitors.iter().map(|m| m.brightness().is_some()).collect()
+                    });
                     let line = monitors
                         .iter()
-                        .find_map(|m| m.brightness())
+                        .zip(capable.iter())
+                        .filter(|(_, ok)| **ok)
+                        .find_map(|(m, _)| m.brightness())
                         .map(|b| {
                             let percent = (b.current * 100 + b.max / 2) / b.max;
                             format!("{}\n", percent.min(100))
@@ -176,11 +185,19 @@ pub fn serve() -> std::io::Result<()> {
     .map_err(|e| eprintln!("not following the Windows brightness slider: {e}"))
     .ok();
 
+    let mut first = true;
     loop {
+        // The first instance claims the name: if another helper already serves it, fail
+        // loudly instead of silently running two servers and two injectors side by side.
+        let open_mode = if first {
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE
+        } else {
+            PIPE_ACCESS_DUPLEX
+        };
         let handle = unsafe {
             CreateNamedPipeW(
                 w!(r"\\.\pipe\BrightTray"),
-                PIPE_ACCESS_DUPLEX,
+                open_mode,
                 PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
                 PIPE_UNLIMITED_INSTANCES,
                 4096,
@@ -190,8 +207,16 @@ pub fn serve() -> std::io::Result<()> {
             )
         };
         if handle == INVALID_HANDLE_VALUE {
-            return Err(std::io::Error::last_os_error());
+            let error = std::io::Error::last_os_error();
+            if first && error.raw_os_error() == Some(ERROR_ACCESS_DENIED.0 as i32) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AddrInUse,
+                    r"\\.\pipe\BrightTray is already served by another BrightTray instance",
+                ));
+            }
+            return Err(error);
         }
+        first = false;
         // The File owns the handle from here on and closes it on drop.
         let pipe = unsafe { File::from_raw_handle(handle.0 as _) };
 

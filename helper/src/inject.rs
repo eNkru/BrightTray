@@ -98,13 +98,6 @@ pub fn module_loaded(pid: u32, name: &str) -> bool {
 }
 
 fn inject_pid(pid: u32, dll: &Path) -> Result<(), String> {
-    let path: Vec<u16> = dll
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let bytes = path.len() * std::mem::size_of::<u16>();
-
     unsafe {
         let process = OpenProcess(
             PROCESS_CREATE_THREAD
@@ -117,18 +110,20 @@ fn inject_pid(pid: u32, dll: &Path) -> Result<(), String> {
         )
         .map_err(|e| format!("OpenProcess({pid}): {e}"))?;
 
-        let result = inject_inner(process, pid, &path, bytes);
+        let result = inject_inner(process, pid, dll);
         let _ = CloseHandle(process);
         result
     }
 }
 
-unsafe fn inject_inner(
-    process: HANDLE,
-    pid: u32,
-    path: &[u16],
-    bytes: usize,
-) -> Result<(), String> {
+unsafe fn inject_inner(process: HANDLE, pid: u32, dll: &Path) -> Result<(), String> {
+    let path: Vec<u16> = dll
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let bytes = path.len() * std::mem::size_of::<u16>();
+
     let mut remote: *mut c_void = std::ptr::null_mut();
     let mut thread: HANDLE = HANDLE::default();
     let mut exit_code = 0u32;
@@ -175,10 +170,17 @@ unsafe fn inject_inner(
         }
         GetExitCodeThread(thread, &mut exit_code)
             .map_err(|e| format!("GetExitCodeThread({pid}): {e}"))?;
-        if exit_code == 0 {
+        // The exit code is only the low 32 bits of the HMODULE, which can legitimately be zero
+        // on x64, so a zero is confirmed against the module list before calling it a failure.
+        // The loader's own error code lives in the remote thread and cannot be read from here.
+        let name = dll
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if exit_code == 0 && !module_loaded(pid, &name) {
             return Err(format!(
-                "LoadLibraryW failed in pid {pid} (error {})",
-                std::io::Error::last_os_error()
+                "LoadLibraryW returned NULL in pid {pid}: {} could not be loaded                  (wrong architecture, missing dependency, or blocked by security software)",
+                dll.display()
             ));
         }
         Ok(())
@@ -225,9 +227,9 @@ pub fn inject_all(dll: &Path) -> Result<usize, String> {
 /// Starts ShellHost.exe suspended, loads the hook while its main thread has not run a single
 /// instruction, waits for the hook to finish patching, and only then resumes the process.
 ///
-/// This is what makes the brightness slider appear: QuickActionsDataModel snapshots the
-/// brightness capability very early, so a late injection into an already-running ShellHost is
-/// too late even though the vtable is patched.
+/// Fallback only. In testing, a normal injection into a running ShellHost is enough because the
+/// `IQuickAction` hook answers every later query; this path exists for builds where Quick
+/// Settings caches the brightness capability before a late hook could take effect.
 pub fn inject_early(dll: &Path) -> Result<u32, String> {
     if !dll.is_file() {
         return Err(format!("hook DLL not found: {}", dll.display()));
@@ -271,20 +273,7 @@ pub fn inject_early(dll: &Path) -> Result<u32, String> {
         return Err(format!("CreateProcessW(ShellHost): {e}"));
     }
 
-    let path: Vec<u16> = dll
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let bytes = path.len() * std::mem::size_of::<u16>();
-    let injected = unsafe {
-        inject_inner(
-            process_info.hProcess,
-            process_info.dwProcessId,
-            &path,
-            bytes,
-        )
-    };
+    let injected = unsafe { inject_inner(process_info.hProcess, process_info.dwProcessId, dll) };
     if let Err(e) = injected {
         let _ = unsafe { ResumeThread(process_info.hThread) };
         let _ = unsafe { CloseHandle(process_info.hThread) };
@@ -310,38 +299,74 @@ pub fn inject_early(dll: &Path) -> Result<u32, String> {
     Ok(pid)
 }
 
-/// Keeps the hook present for the lifetime of the helper: after a ShellHost restart the new
-/// process gets the DLL again. Errors are printed only when they change, so a missing DLL or
-/// a locked-down shell does not flood the console.
-pub fn watch_and_inject(dll: PathBuf) {
+/// What the ShellHost watcher observed. Reported only when it changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WatchEvent {
+    /// The hook is loaded in every running ShellHost.
+    Hooked,
+    /// No ShellHost is running right now.
+    NoShellHost,
+    DllMissing(PathBuf),
+    Error(String),
+}
+
+impl std::fmt::Display for WatchEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WatchEvent::Hooked => write!(f, "hook loaded in ShellHost"),
+            WatchEvent::NoShellHost => write!(f, "{SHELLHOST} is not running"),
+            WatchEvent::DllMissing(path) => write!(f, "{} not found", path.display()),
+            WatchEvent::Error(message) => f.write_str(message),
+        }
+    }
+}
+
+/// Keeps the hook present for the lifetime of the caller: after a ShellHost restart the new
+/// process gets the DLL again. `report` is called whenever the observed state changes, so a
+/// missing DLL or a locked-down shell does not flood the output.
+///
+/// PIDs that already have the hook are remembered, so the steady state costs one process
+/// snapshot per tick instead of a module snapshot of ShellHost.
+pub fn watch_and_inject(dll: PathBuf, report: impl Fn(&WatchEvent) + Send + 'static) {
     std::thread::spawn(move || {
-        let mut last_error: Option<String> = None;
-        let mut reported_missing = false;
+        let name = dll
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| HOOK_DLL.to_string());
+        let mut hooked: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut last: Option<WatchEvent> = None;
 
         loop {
-            let mut error = None;
-            if !dll.is_file() {
-                if !reported_missing {
-                    eprintln!("hook watcher: {} not found", dll.display());
-                    reported_missing = true;
-                }
+            let pids = shellhost_pids();
+            hooked.retain(|pid| pids.contains(pid));
+
+            let event = if !dll.is_file() {
+                WatchEvent::DllMissing(dll.clone())
+            } else if pids.is_empty() {
+                WatchEvent::NoShellHost
             } else {
-                reported_missing = false;
-                for pid in shellhost_pids() {
-                    if module_loaded(pid, HOOK_DLL) {
+                let mut error = None;
+                for &pid in &pids {
+                    if hooked.contains(&pid) {
                         continue;
                     }
-                    if let Err(e) = inject_pid(pid, &dll) {
-                        error = Some(e);
+                    if module_loaded(pid, &name) {
+                        hooked.insert(pid);
+                        continue;
+                    }
+                    match inject_pid(pid, &dll) {
+                        Ok(()) => {
+                            hooked.insert(pid);
+                        }
+                        Err(e) => error = Some(e),
                     }
                 }
-            }
+                error.map_or(WatchEvent::Hooked, WatchEvent::Error)
+            };
 
-            if error != last_error {
-                if let Some(message) = &error {
-                    eprintln!("hook watcher: {message}");
-                }
-                last_error = error;
+            if last.as_ref() != Some(&event) {
+                report(&event);
+                last = Some(event);
             }
             std::thread::sleep(Duration::from_millis(500));
         }
