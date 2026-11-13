@@ -391,7 +391,9 @@
 
     // Apply button
     const apply = $("btn-apply");
-    apply.disabled = !mon || !mon.ddc || isApplied || state.scanning;
+    // A background rescan (e.g. on focus) must not swallow the click that focused the window,
+    // so scanning only affects the refresh button. Rust re-validates the key on apply.
+    apply.disabled = !mon || !mon.ddc || isApplied;
     apply.classList.toggle("done", !!isApplied);
     apply.innerHTML = isApplied ? CHECK + "<span>已应用</span>" : "<span>应用</span>";
 
