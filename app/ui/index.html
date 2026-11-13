@@ -23,7 +23,6 @@
 
     /* Light: neutral grays, ink-black as the only emphasis */
     --bg-solid: #f4f4f4;
-    --bg-mica: rgba(244, 244, 244, 0.9);
     --surface: #ffffff;
     --surface-hover: #fbfbfb;
     --surface-2: #eeeeee;
@@ -46,7 +45,6 @@
   @media (prefers-color-scheme: dark) {
     :root {
       --bg-solid: #141414;
-      --bg-mica: rgba(20, 20, 20, 0.92);
       --surface: rgba(255, 255, 255, 0.035);
       --surface-hover: rgba(255, 255, 255, 0.06);
       --surface-2: rgba(255, 255, 255, 0.07);
@@ -70,7 +68,6 @@
 
   * { box-sizing: border-box; }
   html, body { margin: 0; }
-  html { background: transparent; }
   body {
     font-family: var(--font);
     font-size: 13px;
@@ -80,7 +77,6 @@
     user-select: none;
     -webkit-font-smoothing: antialiased;
   }
-  body.mica { background: var(--bg-mica); }
   button { font: inherit; color: inherit; }
 
   /* ── Title bar ─────────────────────────────── */
@@ -295,7 +291,6 @@
 
   function render() {
     if (!state) return;
-    document.body.classList.toggle("mica", !!state.mica);
     $("opt-autostart").checked = !!state.autostart;
 
     const keys = state.monitors.map((m) => m.key);

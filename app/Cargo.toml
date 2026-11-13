@@ -14,7 +14,6 @@ serde_json = "1"
 tao = "0.31"
 wry = "0.47"
 tray-icon = "0.19"
-window-vibrancy = "0.5"
 
 [dependencies.windows]
 version = "0.58"

@@ -87,7 +87,6 @@ struct App {
     hook: Hook,
     watcher_started: bool,
     error: Option<String>,
-    mica: bool,
     /// Launched by the Run key: resume the saved monitor once the first scan is in.
     resume_pending: bool,
     /// Rescans spent waiting for the saved monitor after logon (DisplayPort monitors can take
@@ -138,7 +137,6 @@ impl App {
             "hook": hook,
             "error": self.error,
             "autostart": autostart::is_enabled(),
-            "mica": self.mica,
         });
         let _ = self
             .webview
@@ -292,11 +290,6 @@ impl App {
         self.reveal();
     }
 
-    fn apply_backdrop(&mut self) {
-        let dark = self.window.theme() == Theme::Dark;
-        self.mica = window_vibrancy::apply_mica(&self.window, Some(dark)).is_ok();
-    }
-
     /// Returns false when the app should exit.
     fn on_ipc(&mut self, message: &str) -> bool {
         let (command, argument) = message.split_once(':').unwrap_or((message, ""));
@@ -368,7 +361,6 @@ fn main() {
         .with_maximizable(false)
         .with_decorations(false)
         .with_undecorated_shadow(true)
-        .with_transparent(true)
         .with_visible(false)
         .with_window_icon(WindowIcon::from_resource(ICON_RESOURCE, None).ok())
         .build(&event_loop)
@@ -381,7 +373,13 @@ fn main() {
             UI.replace("{{ICON}}", ICON_SVG)
                 .replace("{{LANG}}", i18n::lang().code()),
         )
-        .with_transparent(true)
+        // Opaque on purpose: a transparent WebView2 does not clear what it painted before, so
+        // changed text (the brightness percentage) left a ghost of the old value behind.
+        .with_background_color(if window.theme() == Theme::Dark {
+            (0x14, 0x14, 0x14, 0xff)
+        } else {
+            (0xf4, 0xf4, 0xf4, 0xff)
+        })
         .with_devtools(cfg!(debug_assertions))
         .with_ipc_handler(move |request| {
             let _ = ipc_proxy.send_event(UserEvent::Ipc(request.body().clone()));
@@ -427,7 +425,6 @@ fn main() {
         hook: Hook::Idle,
         watcher_started: false,
         error: None,
-        mica: false,
         resume_pending: started_by_logon,
         resume_attempts: 0,
         last_scan: None,
@@ -435,7 +432,6 @@ fn main() {
         show_id: show_item.id().clone(),
         quit_id: quit_item.id().clone(),
     };
-    app.apply_backdrop();
     // Scan right away instead of waiting for the page: a logon start never shows the window.
     app.scan();
     if !started_by_logon {
@@ -460,10 +456,6 @@ fn main() {
                     if app.last_scan.is_none_or(|t| t.elapsed().as_secs() >= 3) {
                         app.scan();
                     }
-                }
-                WindowEvent::ThemeChanged(_) => {
-                    app.apply_backdrop();
-                    app.push_state();
                 }
                 _ => {}
             },
