@@ -127,6 +127,10 @@ BrightTray 通过 `CreateRemoteThread` 把 DLL 加载进 `ShellHost.exe`，部�
 
 BrightTray 会修改 Windows Shell 未公开的内部接口，系统更新可能导致它失效。使用风险自负。
 
+## 友情链接
+
+[LINUX DO](https://linux.do/)
+
 <br>
 
 <div align="center">

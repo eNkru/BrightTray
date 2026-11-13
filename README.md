@@ -127,6 +127,10 @@ Turn off **Start with Windows**, choose **Exit** from the tray menu, then sign o
 
 BrightTray patches undocumented internals of the Windows shell. A system update may break it. Use at your own risk.
 
+## Friends
+
+[LINUX DO](https://linux.do/)
+
 <br>
 
 <div align="center">
