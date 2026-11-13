@@ -1,52 +1,37 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1280" height="400" viewBox="0 0 1280 400">
   <defs>
-    <linearGradient id="bbg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0B1033"/>
-      <stop offset="0.6" stop-color="#1A1460"/>
-      <stop offset="1" stop-color="#2A1680"/>
+    <linearGradient id="bn-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a1a1a"/>
+      <stop offset="1" stop-color="#0e0e0e"/>
     </linearGradient>
-    <radialGradient id="bglow" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#FFB020" stop-opacity="0.35"/>
-      <stop offset="1" stop-color="#FFB020" stop-opacity="0"/>
+    <radialGradient id="bn-glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.09"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
     </radialGradient>
-    <radialGradient id="bglow2" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#3A6BFF" stop-opacity="0.45"/>
-      <stop offset="1" stop-color="#3A6BFF" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="title" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#FFFFFF"/>
-      <stop offset="1" stop-color="#FFD9A0"/>
-    </linearGradient>
-    <linearGradient id="bfill" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#FF9A1F"/>
-      <stop offset="1" stop-color="#FFD24A"/>
-    </linearGradient>
   </defs>
 
-  <rect width="1280" height="400" fill="url(#bbg)"/>
-  <circle cx="250" cy="200" r="260" fill="url(#bglow)"/>
-  <circle cx="1150" cy="40" r="320" fill="url(#bglow2)"/>
-
-  <!-- subtle grid -->
-  <g stroke="#FFFFFF" stroke-opacity="0.04" stroke-width="1">
+  <rect width="1280" height="400" fill="url(#bn-bg)"/>
+  <circle cx="240" cy="200" r="250" fill="url(#bn-glow)"/>
+  <!-- hairline grid -->
+  <g stroke="#ffffff" stroke-opacity="0.035" stroke-width="1">
     <path d="M0 80H1280M0 160H1280M0 240H1280M0 320H1280"/>
     <path d="M160 0V400M320 0V400M480 0V400M640 0V400M800 0V400M960 0V400M1120 0V400"/>
   </g>
 
-  <image x="110" y="70" width="260" height="260" xlink:href="icon-512.png"/>
+  <image x="120" y="80" width="240" height="240" xlink:href="icon-512.png"/>
 
-  <text x="440" y="185" font-family="Segoe UI Variable Display, Segoe UI, Inter, Arial, sans-serif"
-        font-size="92" font-weight="700" fill="url(#title)" letter-spacing="-1">BrightTray</text>
+  <text x="440" y="186" font-family="Segoe UI Variable Display, Segoe UI, Inter, Arial, sans-serif"
+        font-size="88" font-weight="700" fill="#f5f5f5" letter-spacing="-1">BrightTray</text>
   <text x="444" y="238" font-family="Segoe UI Variable Text, Segoe UI, Inter, Arial, sans-serif"
-        font-size="28" fill="#C9D3FF">Bring the brightness slider back to Windows 11 Quick Settings</text>
-  <text x="444" y="276" font-family="Segoe UI Variable Text, Segoe UI, Inter, Arial, sans-serif"
-        font-size="28" fill="#C9D3FF">— for external monitors, over DDC/CI.</text>
+        font-size="27" fill="#a6a6a6">Bring the brightness slider back to Windows 11 Quick Settings</text>
+  <text x="444" y="274" font-family="Segoe UI Variable Text, Segoe UI, Inter, Arial, sans-serif"
+        font-size="27" fill="#a6a6a6">— for external monitors, over DDC/CI.</text>
 
-  <!-- decorative slider -->
-  <rect x="444" y="316" width="420" height="8" rx="4" fill="#FFFFFF" fill-opacity="0.18"/>
-  <rect x="444" y="316" width="300" height="8" rx="4" fill="url(#bfill)"/>
-  <circle cx="744" cy="320" r="11" fill="#FFFFFF"/>
-  <circle cx="744" cy="320" r="5" fill="#FF9A1F"/>
-  <text x="884" y="329" font-family="Segoe UI Variable Text, Segoe UI, Inter, Arial, sans-serif"
-        font-size="24" font-weight="600" fill="#FFD24A">72%</text>
+  <!-- slider motif -->
+  <rect x="444" y="317" width="400" height="6" rx="3" fill="#ffffff" fill-opacity="0.16"/>
+  <rect x="444" y="317" width="288" height="6" rx="3" fill="#f5f5f5"/>
+  <circle cx="732" cy="320" r="11" fill="#f5f5f5"/>
+  <circle cx="732" cy="320" r="11" fill="none" stroke="#0e0e0e" stroke-opacity="0.35" stroke-width="2"/>
+  <text x="866" y="329" font-family="Segoe UI Variable Text, Segoe UI, Inter, Arial, sans-serif"
+        font-size="23" font-weight="600" fill="#f5f5f5">72%</text>
 </svg>

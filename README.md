@@ -5,11 +5,11 @@
 <h3>让台式机的 Windows 11 快速设置（Win + A）重新拥有亮度条，并通过 DDC/CI 直接调节外接显示器。</h3>
 
 <p>
-  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2011-0078D4?style=flat-square&logo=windows11&logoColor=white">
-  <img alt="Rust" src="https://img.shields.io/badge/built%20with-Rust-B7410E?style=flat-square&logo=rust&logoColor=white">
-  <img alt="Arch" src="https://img.shields.io/badge/arch-x64-4B3BEA?style=flat-square">
-  <img alt="No admin" src="https://img.shields.io/badge/admin-not%20required-2EA043?style=flat-square">
-  <img alt="Protocol" src="https://img.shields.io/badge/DDC%2FCI-VCP%200x10-FF9A1F?style=flat-square">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2011-2b2b2b?style=flat-square&labelColor=555555&logo=windows11&logoColor=white">
+  <img alt="Rust" src="https://img.shields.io/badge/built%20with-Rust-2b2b2b?style=flat-square&labelColor=555555&logo=rust&logoColor=white">
+  <img alt="Arch" src="https://img.shields.io/badge/arch-x64-2b2b2b?style=flat-square&labelColor=555555">
+  <img alt="No admin" src="https://img.shields.io/badge/admin-not%20required-2b2b2b?style=flat-square&labelColor=555555">
+  <img alt="Protocol" src="https://img.shields.io/badge/DDC%2FCI-VCP%200x10-2b2b2b?style=flat-square&labelColor=555555">
 </p>
 
 <p>
@@ -119,7 +119,7 @@ target\release\brighttray-helper.exe serve
 `serve` 会控制所有支持 DDC/CI 的显示器。它与桌面应用共用同一个管道名，两者不能同时运行。
 
 <div align="center">
-  <img src="docs/screenshots/demo.png" alt="拖动亮度条调节外接显示器" width="720">
+  <img src="docs/screenshots/demo.png" alt="点击应用后，快速设置中出现亮度条" width="760">
 </div>
 
 ## 🧠 工作原理

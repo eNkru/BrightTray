@@ -1,78 +1,32 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
   <defs>
-    <!-- Tile: deep Fluent blue into violet -->
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#3A6BFF"/>
-      <stop offset="0.55" stop-color="#4B3BEA"/>
-      <stop offset="1" stop-color="#2A1680"/>
+    <linearGradient id="bt-tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2c2c2c"/>
+      <stop offset="1" stop-color="#121212"/>
     </linearGradient>
-    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.22"/>
-      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0"/>
+    <linearGradient id="bt-edge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.04"/>
     </linearGradient>
-    <!-- Monitor glass -->
-    <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#0E1440"/>
-      <stop offset="1" stop-color="#151C55"/>
-    </linearGradient>
-    <linearGradient id="bezel" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.95"/>
-      <stop offset="1" stop-color="#C9D3FF" stop-opacity="0.9"/>
-    </linearGradient>
-    <!-- Sun -->
-    <radialGradient id="sun" cx="0.42" cy="0.38" r="0.7">
-      <stop offset="0" stop-color="#FFF6C8"/>
-      <stop offset="0.45" stop-color="#FFD24A"/>
-      <stop offset="1" stop-color="#FF9A1F"/>
-    </radialGradient>
-    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#FFC94A" stop-opacity="0.75"/>
-      <stop offset="0.55" stop-color="#FF9A1F" stop-opacity="0.22"/>
-      <stop offset="1" stop-color="#FF9A1F" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="fill" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#FF9A1F"/>
-      <stop offset="1" stop-color="#FFD24A"/>
-    </linearGradient>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
-      <feGaussianBlur in="SourceAlpha" stdDeviation="5"/>
-      <feOffset dy="5" result="b"/>
-      <feComponentTransfer><feFuncA type="linear" slope="0.35"/></feComponentTransfer>
-      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
-    <clipPath id="screen"><rect x="44" y="50" width="168" height="112" rx="10"/></clipPath>
   </defs>
 
   <!-- Tile -->
-  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
-  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#sheen)"/>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bt-tile)"/>
+  <rect x="9" y="9" width="238" height="238" rx="55" fill="none" stroke="url(#bt-edge)" stroke-width="2"/>
 
-  <!-- Monitor -->
-  <g filter="url(#shadow)">
-    <rect x="36" y="42" width="184" height="128" rx="18" fill="url(#bezel)"/>
-    <rect x="44" y="50" width="168" height="112" rx="10" fill="url(#glass)"/>
-    <g clip-path="url(#screen)">
-      <circle cx="128" cy="106" r="70" fill="url(#glow)"/>
+  <!-- Brightness: half-filled sun -->
+  <g transform="translate(128 128)" fill="none" stroke="#f5f5f5" stroke-linecap="round">
+    <circle r="38" stroke-width="12"/>
+    <path d="M0 -38 A38 38 0 0 1 0 38 Z" fill="#f5f5f5" stroke="none"/>
+    <g stroke-width="12">
+      <line x1="0" y1="-64" x2="0" y2="-80"/>
+      <line x1="0" y1="64" x2="0" y2="80"/>
+      <line x1="-64" y1="0" x2="-80" y2="0"/>
+      <line x1="64" y1="0" x2="80" y2="0"/>
+      <line x1="45.3" y1="-45.3" x2="56.6" y2="-56.6"/>
+      <line x1="-45.3" y1="-45.3" x2="-56.6" y2="-56.6"/>
+      <line x1="45.3" y1="45.3" x2="56.6" y2="56.6"/>
+      <line x1="-45.3" y1="45.3" x2="-56.6" y2="56.6"/>
     </g>
-    <path d="M110 170 h36 l6 14 h-48 z" fill="url(#bezel)"/>
   </g>
-
-  <!-- Sun -->
-  <g stroke="#FFD24A" stroke-width="7" stroke-linecap="round">
-    <line x1="128" y1="68"  x2="128" y2="76"/>
-    <line x1="128" y1="136" x2="128" y2="144"/>
-    <line x1="90"  y1="106" x2="98"  y2="106"/>
-    <line x1="158" y1="106" x2="166" y2="106"/>
-    <line x1="101.1" y1="79.1"  x2="106.8" y2="84.8"/>
-    <line x1="149.2" y1="127.2" x2="154.9" y2="132.9"/>
-    <line x1="101.1" y1="132.9" x2="106.8" y2="127.2"/>
-    <line x1="149.2" y1="84.8"  x2="154.9" y2="79.1"/>
-  </g>
-  <circle cx="128" cy="106" r="20" fill="url(#sun)"/>
-
-  <!-- Brightness slider -->
-  <rect x="52" y="206" width="152" height="10" rx="5" fill="#FFFFFF" fill-opacity="0.28"/>
-  <rect x="52" y="206" width="106" height="10" rx="5" fill="url(#fill)"/>
-  <circle cx="158" cy="211" r="12" fill="#FFFFFF" filter="url(#shadow)"/>
-  <circle cx="158" cy="211" r="5.5" fill="#FF9A1F"/>
 </svg>

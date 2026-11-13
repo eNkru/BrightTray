@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- Simplified glyph for 16-24 px: rays drop out, the half-filled disc carries the meaning. -->
+  <defs>
+    <linearGradient id="bt-tile-s" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2c2c2c"/>
+      <stop offset="1" stop-color="#121212"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="256" height="256" rx="56" fill="url(#bt-tile-s)"/>
+  <g transform="translate(128 128)">
+    <circle r="72" fill="none" stroke="#f5f5f5" stroke-width="22"/>
+    <path d="M0 -72 A72 72 0 0 1 0 72 Z" fill="#f5f5f5"/>
+  </g>
+</svg>
