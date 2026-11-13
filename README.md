@@ -54,7 +54,7 @@ BrightTray 把这两头接了起来：
 | ⚡ **合并写入** | DDC/CI 单条命令约 50 ms，连续拖动产生的写入只保留最新值，不排长队 |
 | 🛡️ **零硬编码地址** | 不依赖任何 RVA 或 PDB：通过导出函数拿到对象，再用 `get_Id` / `FriendlyName` 校验身份后才打补丁 |
 | 🧯 **失败即放弃** | vtable 不在模块范围内、ID 不匹配、导出缺失，都会直接放弃安装，不会弄崩 ShellHost |
-| ♻️ **自动续命** | `serve` 模式持续监视 ShellHost，进程重启后自动重新注入 |
+| ♻️ **自动续命** | 持续监视 ShellHost，进程重启后自动重新注入；桌面应用遇到已运行一段时间的 ShellHost 会先重启它，确保亮度条能出现 |
 | 🔓 **无需管理员** | ShellHost 以当前用户、中完整性级别运行，普通权限即可注入 |
 | 🔌 **开放接口** | 提供 `\\.\pipe\BrightTray` 文本协议，脚本或其他工具都能调用 |
 | 🔍 **只读诊断** | `probe` 子命令只查询、不打补丁，可在注入前先确认系统是否兼容 |
@@ -95,6 +95,7 @@ brighttray_hook.dll     # 注入 ShellHost.exe 的 hook
 1. 运行 `BrightTray.exe`，窗口会列出所有已连接的显示器，并标出是否支持 DDC/CI 和当前亮度。
 2. 选中要控制的显示器。如果它**不支持 DDC/CI**，BrightTray 只会给出提示，不会做任何修改。
 3. 点击 **应用**，BrightTray 才开始工作：启动后台服务并挂接快速设置。
+   如果 ShellHost 已经运行了一段时间，它的快速设置面板可能已经缓存了"没有亮度条"，BrightTray 会自动重启一次 ShellHost（约 1 秒，系统会自动拉起），并在新进程启动的瞬间完成挂接。
 4. 按 <kbd>Win</kbd> + <kbd>A</kbd>，亮度条就会出现在音量滑块旁边。
 
 | 选项 | 说明 |
@@ -223,7 +224,7 @@ BrightTray 运行在系统 Shell 进程内部，因此把"不出事"放在第一
 1. 先运行 `brighttray-helper list`，确认显示器能读到亮度；读不到时请在显示器 OSD 里开启 DDC/CI。
 2. 查看 hook 日志 `%TEMP%\brighttray-hook.log`，应能看到 `IQuickAction hook installed`。
 3. 如果日志显示校验失败，说明系统更新改变了接口布局，请附上日志提交 Issue。
-4. 也可以试试 `inject --early`，它会重启 ShellHost 并在初始化前完成注入。
+4. 使用命令行时，晚注入的 ShellHost 可能已经缓存了"没有亮度条"：运行 `taskkill /F /IM ShellHost.exe` 让 `serve` 在新进程启动时重新注入，或使用 `inject --early`。桌面应用会自动处理这种情况。
 
 </details>
 

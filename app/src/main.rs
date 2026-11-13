@@ -112,6 +112,7 @@ impl App {
             Hook::Starting => json!({ "kind": "starting" }),
             Hook::Event(WatchEvent::Hooked) => json!({ "kind": "hooked" }),
             Hook::Event(WatchEvent::NoShellHost) => json!({ "kind": "waiting" }),
+            Hook::Event(WatchEvent::Restarting) => json!({ "kind": "restarting" }),
             Hook::Event(WatchEvent::DllMissing(_)) => json!({ "kind": "missing" }),
             Hook::Event(WatchEvent::Error(message)) => {
                 json!({ "kind": "error", "message": message })
@@ -216,7 +217,9 @@ impl App {
             match inject::default_dll_path() {
                 Ok(dll) => {
                     let proxy = self.proxy.clone();
-                    inject::watch_and_inject(dll, move |event| {
+                    // Restart a ShellHost that has been up for a while: its Quick Settings
+                    // panel may already have cached "no brightness".
+                    inject::watch_and_inject(dll, true, move |event| {
                         let _ = proxy.send_event(UserEvent::Watch(event.clone()));
                     });
                 }

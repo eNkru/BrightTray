@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use windows::core::{s, w, PCWSTR, PWSTR};
+use windows::Win32::Foundation::FILETIME;
 use windows::Win32::Foundation::{CloseHandle, FALSE, HANDLE, TRUE, WAIT_OBJECT_0};
 use windows::Win32::System::Diagnostics::Debug::WriteProcessMemory;
 use windows::Win32::System::Diagnostics::ToolHelp::{
@@ -20,10 +21,11 @@ use windows::Win32::System::Memory::{
     VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
 };
 use windows::Win32::System::Threading::{
-    CreateEventW, CreateProcessW, CreateRemoteThread, GetExitCodeThread, OpenProcess, ResetEvent,
-    ResumeThread, TerminateProcess, WaitForSingleObject, CREATE_SUSPENDED, PROCESS_CREATE_THREAD,
-    PROCESS_INFORMATION, PROCESS_QUERY_INFORMATION, PROCESS_TERMINATE, PROCESS_VM_OPERATION,
-    PROCESS_VM_READ, PROCESS_VM_WRITE, STARTUPINFOW,
+    CreateEventW, CreateProcessW, CreateRemoteThread, GetExitCodeThread, GetProcessTimes,
+    OpenProcess, ResetEvent, ResumeThread, TerminateProcess, WaitForSingleObject, CREATE_SUSPENDED,
+    PROCESS_CREATE_THREAD, PROCESS_INFORMATION, PROCESS_QUERY_INFORMATION,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, PROCESS_VM_OPERATION, PROCESS_VM_READ,
+    PROCESS_VM_WRITE, STARTUPINFOW,
 };
 
 pub const SHELLHOST: &str = "ShellHost.exe";
@@ -299,6 +301,45 @@ pub fn inject_early(dll: &Path) -> Result<u32, String> {
     Ok(pid)
 }
 
+/// How long a ShellHost may have been running and still count as "just started". Quick Settings
+/// caches which tiles are applicable once its panel has been built, so a hook that arrives
+/// later than this may be too late for the brightness slider to appear.
+const FRESH_SHELLHOST: Duration = Duration::from_secs(10);
+/// Never restart ShellHost more often than this, whatever happens.
+const RESTART_COOLDOWN: Duration = Duration::from_secs(60);
+
+/// How long `pid` has been running, if Windows will say.
+fn process_age(pid: u32) -> Option<Duration> {
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid).ok()?;
+        let mut creation = FILETIME::default();
+        let mut exit = FILETIME::default();
+        let mut kernel = FILETIME::default();
+        let mut user = FILETIME::default();
+        let ok = GetProcessTimes(process, &mut creation, &mut exit, &mut kernel, &mut user);
+        let _ = CloseHandle(process);
+        ok.ok()?;
+        // FILETIME counts 100 ns ticks since 1601-01-01.
+        const UNIX_EPOCH_TICKS: u64 = 116_444_736_000_000_000;
+        let ticks = (u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime);
+        let since_epoch = ticks.checked_sub(UNIX_EPOCH_TICKS)?;
+        let created = std::time::UNIX_EPOCH + Duration::from_nanos(since_epoch * 100);
+        std::time::SystemTime::now().duration_since(created).ok()
+    }
+}
+
+/// Ends a ShellHost process; sihost starts a new one within about a second.
+fn restart_shellhost(pid: u32) -> Result<(), String> {
+    unsafe {
+        let process = OpenProcess(PROCESS_TERMINATE, FALSE, pid)
+            .map_err(|e| format!("OpenProcess({pid}): {e}"))?;
+        let result =
+            TerminateProcess(process, 0).map_err(|e| format!("TerminateProcess({pid}): {e}"));
+        let _ = CloseHandle(process);
+        result
+    }
+}
+
 /// What the ShellHost watcher observed. Reported only when it changes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WatchEvent {
@@ -306,6 +347,9 @@ pub enum WatchEvent {
     Hooked,
     /// No ShellHost is running right now.
     NoShellHost,
+    /// A ShellHost that had been running for a while was restarted so the hook can load
+    /// before Quick Settings builds its panel.
+    Restarting,
     DllMissing(PathBuf),
     Error(String),
 }
@@ -315,6 +359,7 @@ impl std::fmt::Display for WatchEvent {
         match self {
             WatchEvent::Hooked => write!(f, "hook loaded in ShellHost"),
             WatchEvent::NoShellHost => write!(f, "{SHELLHOST} is not running"),
+            WatchEvent::Restarting => write!(f, "restarting {SHELLHOST} so the hook loads early"),
             WatchEvent::DllMissing(path) => write!(f, "{} not found", path.display()),
             WatchEvent::Error(message) => f.write_str(message),
         }
@@ -327,7 +372,16 @@ impl std::fmt::Display for WatchEvent {
 ///
 /// PIDs that already have the hook are remembered, so the steady state costs one process
 /// snapshot per tick instead of a module snapshot of ShellHost.
-pub fn watch_and_inject(dll: PathBuf, report: impl Fn(&WatchEvent) + Send + 'static) {
+///
+/// With `restart_stale`, a ShellHost that has been running for more than a few seconds and does
+/// not have the hook yet is restarted instead of injected: its Quick Settings panel may already
+/// have cached "no brightness", and only a fresh process asks again. The new process is picked
+/// up on the next tick, long before anyone can open Quick Settings.
+pub fn watch_and_inject(
+    dll: PathBuf,
+    restart_stale: bool,
+    report: impl Fn(&WatchEvent) + Send + 'static,
+) {
     std::thread::spawn(move || {
         let name = dll
             .file_name()
@@ -335,6 +389,7 @@ pub fn watch_and_inject(dll: PathBuf, report: impl Fn(&WatchEvent) + Send + 'sta
             .unwrap_or_else(|| HOOK_DLL.to_string());
         let mut hooked: std::collections::HashSet<u32> = std::collections::HashSet::new();
         let mut last: Option<WatchEvent> = None;
+        let mut last_restart: Option<std::time::Instant> = None;
 
         loop {
             let pids = shellhost_pids();
@@ -346,6 +401,7 @@ pub fn watch_and_inject(dll: PathBuf, report: impl Fn(&WatchEvent) + Send + 'sta
                 WatchEvent::NoShellHost
             } else {
                 let mut error = None;
+                let mut restarted = false;
                 for &pid in &pids {
                     if hooked.contains(&pid) {
                         continue;
@@ -354,6 +410,20 @@ pub fn watch_and_inject(dll: PathBuf, report: impl Fn(&WatchEvent) + Send + 'sta
                         hooked.insert(pid);
                         continue;
                     }
+                    let stale = restart_stale
+                        && process_age(pid).is_some_and(|age| age > FRESH_SHELLHOST)
+                        && last_restart.is_none_or(|t| t.elapsed() > RESTART_COOLDOWN);
+                    if stale {
+                        last_restart = Some(std::time::Instant::now());
+                        match restart_shellhost(pid) {
+                            Ok(()) => {
+                                restarted = true;
+                                continue;
+                            }
+                            // Could not restart: a late hook is still better than none.
+                            Err(e) => error = Some(e),
+                        }
+                    }
                     match inject_pid(pid, &dll) {
                         Ok(()) => {
                             hooked.insert(pid);
@@ -361,14 +431,21 @@ pub fn watch_and_inject(dll: PathBuf, report: impl Fn(&WatchEvent) + Send + 'sta
                         Err(e) => error = Some(e),
                     }
                 }
-                error.map_or(WatchEvent::Hooked, WatchEvent::Error)
+                if restarted {
+                    WatchEvent::Restarting
+                } else {
+                    error.map_or(WatchEvent::Hooked, WatchEvent::Error)
+                }
             };
 
             if last.as_ref() != Some(&event) {
                 report(&event);
                 last = Some(event);
             }
-            std::thread::sleep(Duration::from_millis(500));
+            // Poll quickly while a restarted ShellHost is coming back, so the hook lands within
+            // moments of its start.
+            let fast = matches!(last, Some(WatchEvent::Restarting | WatchEvent::NoShellHost));
+            std::thread::sleep(Duration::from_millis(if fast { 100 } else { 500 }));
         }
     });
 }

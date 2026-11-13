@@ -321,6 +321,7 @@
     switch (s.hook.kind) {
       case "hooked": return { cls: "on", text: "运行中 · 快速设置亮度条已就绪" };
       case "waiting": return { cls: "pending", text: "运行中 · 正在等待 ShellHost" };
+      case "restarting": return { cls: "pending", text: "正在重启 ShellHost 以加载亮度条…" };
       case "starting": return { cls: "pending", text: "正在挂接快速设置…" };
       case "missing": return { cls: "err", text: "找不到 brighttray_hook.dll" };
       case "error": return { cls: "err", text: s.hook.message };
