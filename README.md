@@ -243,7 +243,7 @@ BrightTray 通过 `CreateRemoteThread(LoadLibraryW)` 把 DLL 注入 `ShellHost.e
 <details>
 <summary><b>如何卸载？</b></summary>
 
-在托盘菜单中选择"退出"（或结束 `brighttray-helper.exe`），关闭"开机自启动"，然后重启 ShellHost（或注销 / 重启系统）即可。BrightTray 不修改注册表，也不改动任何系统文件。
+先关闭"开机自启动"，再在托盘菜单中选择"退出"（或结束 `brighttray-helper.exe`），然后重启 ShellHost（或注销 / 重启系统）即可。除了开机自启动用到的 `Run` 启动项，BrightTray 不修改注册表，也不改动任何系统文件；设置保存在 `%APPDATA%\BrightTray`，可直接删除。
 
 </details>
 
