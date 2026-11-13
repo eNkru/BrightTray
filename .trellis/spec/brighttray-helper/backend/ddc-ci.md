@@ -55,6 +55,10 @@ true
 keeps ignoring the write still counts as reached — asking again will not
 change its mind. Do not turn that `false` into an error for the user.
 
+**The cost of one `set` is 1 write + 1 read in the happy case, and up to
+3 writes + 3 reads when the monitor keeps disagreeing.** Every write is an
+EEPROM write on the monitor, and a slider drag produces one `set` per step.
+
 ## Percentages are scaled to the monitor's range
 
 ```rust

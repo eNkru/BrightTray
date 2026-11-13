@@ -153,6 +153,19 @@ injector waits for that event before it resumes ShellHost.
 | `QuickActionIsActive` | `true` |
 | anything else | the original implementation |
 
+**The initial value is a placeholder, not a reading.** `CACHED_PERCENT` starts
+at `PIPE_FALLBACK_PERCENT = 100`:
+
+```rust
+const PIPE_FALLBACK_PERCENT: u32 = 100;
+static CACHED_PERCENT: AtomicU32 = AtomicU32::new(PIPE_FALLBACK_PERCENT);
+```
+
+So when the helper is not running, the shell is told the brightness is 100 % —
+a value that was never measured. `install()` overwrites it with the real
+value when `pipe::get_all()` succeeds, but until then the Quick Settings
+slider shows a full-brightness reading that does not match the monitor.
+
 `SetValue("Value", Int32)` clamps to 0..100, stores it in `CACHED_PERCENT`,
 records the time in `LAST_SET_MS` and forwards it to the helper.
 

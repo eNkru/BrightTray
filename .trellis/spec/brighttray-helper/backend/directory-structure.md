@@ -53,6 +53,10 @@ the first argument at the end of `main`.
 `server` depends on `ddc` and `slider`; `inject` and `probe` are independent of
 both. `ddc` depends on nothing in the crate.
 
+Two hard-coded system paths live in `inject.rs`:
+`C:\Windows\System32\ShellHost.exe` (the early-inject path starts this
+executable) and the DLL name `brighttray_hook.dll`.
+
 ## Where new code goes
 
 - A new DDC/CI capability (a new VCP code, a new monitor property) belongs in

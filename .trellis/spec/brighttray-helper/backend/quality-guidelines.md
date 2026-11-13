@@ -1,5 +1,28 @@
 # Quality Guidelines
 
+## The helper terminates ShellHost on purpose
+
+Two paths in `helper/src/inject.rs` end a ShellHost process with
+`TerminateProcess`:
+
+- `inject_early()` kills **every** running ShellHost before starting a
+  suspended replacement.
+- `watch_and_inject(dll, restart_stale = true, …)` kills a ShellHost that has
+  been running for more than `FRESH_SHELLHOST = 10 s`, once per
+  `RESTART_COOLDOWN = 60 s`.
+
+The reason is that Quick Settings caches which tiles are applicable when its
+panel is built; a hook that arrives later than that may be too late for the
+brightness slider to appear.
+
+`brighttray-helper serve` calls `watch_and_inject(dll, false, …)` — the CLI
+never restarts the shell. The **app** calls it with `true`; see the app
+package's [Quality Guidelines](../../brighttray-app/backend/quality-guidelines.md).
+
+Killing the shell is visible to the user: the Start menu and Quick Settings
+disappear for a moment. Treat this path as something that needs an explicit
+reason, not as a default.
+
 ## Required patterns
 
 - **Pace and verify every DDC/CI access.** Go through

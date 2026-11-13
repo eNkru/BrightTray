@@ -30,6 +30,25 @@ the only failure reply, and it means "could not do that right now", not
 The same table is documented in `README.md` under "Pipe protocol" — keep the two
 in sync.
 
+## Who may connect
+
+**Any process running as the same user can connect and can write.**
+
+`CreateNamedPipeW` is called with `lpSecurityAttributes = None`, so the pipe
+gets the default security descriptor of the creating token. `PIPE_REJECT_REMOTE_CLIENTS`
+rejects *remote* (network) clients — it does nothing against other local
+processes running as the same user, which includes any application the user
+starts.
+
+There is also **no rate limit**: `handle_client()` processes every line it
+reads, and `setall` is a write that reaches the monitor. A local process that
+connects in a loop can drive DDC/CI continuously.
+
+These two facts are the current state of the code, not a recommendation. They
+matter when you touch the server: a new command that writes to a monitor
+multiplies the exposure, and a change to the pipe name or its security
+descriptor changes what other processes can reach.
+
 ## Who owns the name
 
 The first server claims the pipe with `FILE_FLAG_FIRST_PIPE_INSTANCE`. If

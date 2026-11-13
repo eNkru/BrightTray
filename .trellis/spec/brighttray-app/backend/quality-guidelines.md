@@ -52,6 +52,24 @@ Rules:
 
   Do not make it transparent to "fix" a colour issue.
 
+## The app restarts ShellHost
+
+The app asks the watcher to restart a long-running ShellHost:
+
+```rust
+// Restart a ShellHost that has been up for a while: its Quick Settings
+// panel may already have cached "no brightness".
+inject::watch_and_inject(dll, true, move |event| { … });
+```
+
+The `true` is `restart_stale`: a ShellHost that has been alive for more than
+10 s is terminated (and restarted by `sihost`) so that the hook is in place
+before Quick Settings builds its panel. The user sees the Start menu and
+Quick Settings disappear briefly.
+
+The CLI does **not** do this — `brighttray-helper serve` passes `false`. The
+difference is deliberate in the code, and the flag is the whole difference.
+
 ## Single instance
 
 ```rust

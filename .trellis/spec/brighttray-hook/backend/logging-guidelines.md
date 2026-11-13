@@ -83,6 +83,13 @@ log(format!(
 The vtable and object addresses are what makes a crash report analysable
 against the module image. They are process-local addresses, not user data.
 
+## No size limit and no rotation
+
+The log is opened in append mode and never truncated or rotated. ShellHost
+restarts often (and the watcher re-injects on every restart), so the file
+grows for as long as the machine keeps running. There is no cleanup code
+anywhere.
+
 ## What is not logged
 
 - No monitor names, no serial numbers, no EDID content — the DLL does not

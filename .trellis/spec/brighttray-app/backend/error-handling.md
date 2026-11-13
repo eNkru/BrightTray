@@ -94,6 +94,9 @@ app cannot run. These are the **only** two `expect()` calls in the crate.
 
 - `Config::save()` ignores write errors — there is nothing the user can do
   about a read-only `%APPDATA%`, and the setting is re-entered on demand.
+  The write is a plain `fs::write` of the whole file, so it is not atomic:
+  a crash between truncate and write leaves an empty `config.ini`, which
+  `load()` then reads as "no monitor saved".
 - `Config::load()` returns the defaults when the file is missing or
   unreadable.
 - `hookdll::extract()` reports failures through the hook status, not as a

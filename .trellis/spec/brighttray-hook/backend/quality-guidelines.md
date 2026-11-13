@@ -11,6 +11,9 @@
 - **Keep `DllMain` trivial**: spawn a thread, sleep, install.
 - **Do the work off the UI thread.** The `GetValue`/`SetValue` hooks run on
   ShellHost's threads and must return immediately.
+- **Never set `panic = "abort"`.** The workspace release profile is in the
+  root `Cargo.toml`; the hook's `catch_unwind` wrappers only work with the
+  default `panic = "unwind"`.
 
 ## Forbidden patterns
 
@@ -24,6 +27,7 @@
 | Doing work in `DllMain` | The loader lock is held; loading a module or calling COM there deadlocks the shell |
 | A hard-coded RVA or offset | A system update moves it; the exported-function route survives |
 | Removing a validation check to make an install succeed | Better a disabled hook than a crashed shell |
+| `panic = "abort"` in the release profile | The hook relies on `catch_unwind` to survive a panic. With `panic = "abort"` there is no unwind, so a panic in a vtable hook would abort **ShellHost** instead of returning `E_FAIL` |
 
 ## Testing
 
