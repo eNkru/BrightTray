@@ -25,6 +25,10 @@ use wry::{WebView, WebViewBuilder};
 use config::Config;
 
 const ICON_RESOURCE: u16 = 1;
+/// Logical window width; the height follows the page content (see the `size` IPC message).
+const WINDOW_WIDTH: f64 = 420.0;
+const MIN_HEIGHT: f64 = 200.0;
+const MAX_HEIGHT: f64 = 720.0;
 /// How many 3-second rescans a logon start waits for the saved monitor (about 30 s).
 const RESUME_ATTEMPTS: u32 = 10;
 const UI: &str = include_str!("../ui/index.html");
@@ -35,6 +39,8 @@ enum UserEvent {
     Ipc(String),
     Scanned(Vec<MonitorView>),
     Rescan,
+    /// Fallback in case the page never reports its size: show the window anyway.
+    Reveal,
     Watch(WatchEvent),
     Show,
     Menu(MenuEvent),
@@ -85,6 +91,8 @@ struct App {
     /// a few seconds to appear after wake).
     resume_attempts: u32,
     last_scan: Option<std::time::Instant>,
+    /// The window is shown only once the page has laid out and sized it, so it never jumps.
+    reveal_pending: bool,
     show_id: MenuId,
     quit_id: MenuId,
 }
@@ -127,7 +135,6 @@ impl App {
             "hook": hook,
             "error": self.error,
             "autostart": autostart::is_enabled(),
-            "closeToTray": self.config.close_to_tray,
             "mica": self.mica,
         });
         let _ = self
@@ -241,8 +248,27 @@ impl App {
         self.scan();
     }
 
+    /// Closing the window always keeps BrightTray running in the tray; "退出" in the tray menu
+    /// is the way out.
     fn hide(&self) {
         self.window.set_visible(false);
+    }
+
+    fn reveal(&mut self) {
+        if self.reveal_pending {
+            self.reveal_pending = false;
+            self.window.set_visible(true);
+            self.window.set_focus();
+        }
+    }
+
+    fn fit_height(&mut self, height: &str) {
+        if let Ok(height) = height.parse::<f64>() {
+            let height = height.clamp(MIN_HEIGHT, MAX_HEIGHT);
+            self.window
+                .set_inner_size(LogicalSize::new(WINDOW_WIDTH, height));
+        }
+        self.reveal();
     }
 
     fn apply_backdrop(&mut self) {
@@ -269,28 +295,15 @@ impl App {
                 }
                 self.push_state();
             }
-            "tray" => {
-                self.config.close_to_tray = argument == "on";
-                self.config.save();
-                self.push_state();
-            }
+            "size" => self.fit_height(argument),
             "minimize" => self.window.set_minimized(true),
-            "close" => return self.on_close(),
+            "close" => self.hide(),
             "drag" => {
                 let _ = self.window.drag_window();
             }
             _ => {}
         }
         true
-    }
-
-    fn on_close(&self) -> bool {
-        if self.config.close_to_tray {
-            self.hide();
-            true
-        } else {
-            false
-        }
     }
 }
 
@@ -329,7 +342,7 @@ fn main() {
 
     let window = WindowBuilder::new()
         .with_title("BrightTray")
-        .with_inner_size(LogicalSize::new(460.0, 660.0))
+        .with_inner_size(LogicalSize::new(WINDOW_WIDTH, 320.0))
         .with_resizable(false)
         .with_maximizable(false)
         .with_decorations(false)
@@ -394,6 +407,7 @@ fn main() {
         resume_pending: started_by_logon,
         resume_attempts: 0,
         last_scan: None,
+        reveal_pending: !started_by_logon,
         show_id: show_item.id().clone(),
         quit_id: quit_item.id().clone(),
     };
@@ -401,7 +415,11 @@ fn main() {
     // Scan right away instead of waiting for the page: a logon start never shows the window.
     app.scan();
     if !started_by_logon {
-        app.window.set_visible(true);
+        let proxy = app.proxy.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+            let _ = proxy.send_event(UserEvent::Reveal);
+        });
     }
 
     event_loop.run(move |event, _, control_flow| {
@@ -411,11 +429,7 @@ fn main() {
 
         match event {
             Event::WindowEvent { event, .. } => match event {
-                WindowEvent::CloseRequested => {
-                    if !app.on_close() {
-                        *control_flow = ControlFlow::Exit;
-                    }
-                }
+                WindowEvent::CloseRequested => app.hide(),
                 // Monitors come and go (sleep, hot-plug, remote sessions): refresh when the
                 // user comes back to the window, at most every few seconds.
                 WindowEvent::Focused(true) => {
@@ -473,6 +487,7 @@ fn main() {
                     app.push_state();
                 }
                 UserEvent::Rescan => app.scan(),
+                UserEvent::Reveal => app.reveal(),
                 UserEvent::Show => app.show(),
                 UserEvent::Menu(event) => {
                     if event.id == app.quit_id {

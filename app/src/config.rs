@@ -2,22 +2,11 @@
 
 use std::path::PathBuf;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Config {
     /// The monitor the user last applied, as [`brighttray::ddc::Monitor::key`] and name.
     pub monitor_key: Option<String>,
     pub monitor_name: Option<String>,
-    pub close_to_tray: bool,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            monitor_key: None,
-            monitor_name: None,
-            close_to_tray: true,
-        }
-    }
 }
 
 fn path() -> Option<PathBuf> {
@@ -40,7 +29,6 @@ impl Config {
                 "monitor_name" if !value.is_empty() => {
                     config.monitor_name = Some(value.to_string())
                 }
-                "close_to_tray" => config.close_to_tray = value != "0",
                 _ => {}
             }
         }
@@ -55,10 +43,9 @@ impl Config {
             let _ = std::fs::create_dir_all(dir);
         }
         let text = format!(
-            "monitor_key={}\nmonitor_name={}\nclose_to_tray={}\n",
+            "monitor_key={}\nmonitor_name={}\n",
             self.monitor_key.as_deref().unwrap_or(""),
             self.monitor_name.as_deref().unwrap_or(""),
-            u8::from(self.close_to_tray),
         );
         let _ = std::fs::write(path, text);
     }
