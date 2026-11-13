@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/brighttray-helper/backend/pipe-protocol.md", "reason": "The pipe contract: who may connect and how the writes are paced"}
+{"file": ".trellis/spec/brighttray-helper/backend/windows-ffi.md", "reason": "The Win32 conventions this task extends with a security descriptor and a new crate feature"}
+{"file": ".trellis/spec/brighttray-helper/backend/quality-guidelines.md", "reason": "The helper's rules about the pipe server and the write path"}
+{"file": ".trellis/spec/brighttray-helper/backend/ddc-ci.md", "reason": "The DDC/CI rules that the per-monitor write budget has to preserve"}

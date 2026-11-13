@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/brighttray-helper/backend/index.md", "reason": "The helper's rules: it is the only DDC/CI speaker, and the P0 work changes its write and pipe behaviour"}
+{"file": ".trellis/spec/brighttray-helper/backend/pipe-protocol.md", "reason": "The pipe contract that P0-02 secures and P0-04 changes the write cadence of"}
+{"file": ".trellis/spec/brighttray-helper/backend/ddc-ci.md", "reason": "The DDC/CI pacing, retry and verification rules that P0-04 restructures"}
+{"file": ".trellis/spec/brighttray-hook/backend/hooking-contract.md", "reason": "The hook's contract; P0-03 changes what the hook reports when it has no measurement"}
+{"file": ".trellis/spec/brighttray-app/backend/quality-guidelines.md", "reason": "The app's threading and window rules; P0-01 changes how the app starts the watcher"}
+{"file": "/home/hju/sources/pt-monitor-win/artifacts/brighttray-fork-notes.md", "reason": "The source audit: the P0 findings, their rationale and the acceptance criteria (research doc, outside this repo)"}

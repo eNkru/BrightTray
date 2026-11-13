@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/brighttray-helper/backend/quality-guidelines.md", "reason": "Documents the ShellHost termination paths this task removes"}
+{"file": ".trellis/spec/brighttray-helper/backend/directory-structure.md", "reason": "The inject module's responsibilities and the hard-coded paths it holds"}
+{"file": ".trellis/spec/brighttray-helper/backend/error-handling.md", "reason": "The CLI exit codes and message style that the new --force-restart guard follows"}
+{"file": ".trellis/spec/brighttray-app/backend/quality-guidelines.md", "reason": "The app's watcher startup, tray menu and threading rules"}
+{"file": ".trellis/spec/brighttray-app/backend/i18n.md", "reason": "The bilingual string convention for the new tray item and notice"}
+{"file": ".trellis/spec/brighttray-app/backend/ui-contract.md", "reason": "The hook.kind mapping that loses its Restarting variant"}

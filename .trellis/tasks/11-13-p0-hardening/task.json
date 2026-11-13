@@ -1,0 +1,31 @@
+{
+  "id": "p0-hardening",
+  "name": "p0-hardening",
+  "title": "P0 hardening: shell stability, honest readings, write amplification and pipe exposure",
+  "description": "Implement the four P0 items of the BrightTray audit (artifacts/brighttray-fork-notes.md): P0-01 stop terminating ShellHost, P0-03 remove the fake 100 percent fallback, P0-04 reduce DDC write amplification, P0-02 restrict the pipe and rate limit writes. Unit tests (P1-01) are explicitly out of scope for now.",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": "brighttray-helper",
+  "priority": "P0",
+  "creator": "Howard Ju",
+  "assignee": "Howard Ju",
+  "createdAt": "2026-11-13",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "11-13-p0-01-no-shellhost-kill",
+    "11-13-p0-03-no-fake-100-percent",
+    "11-13-p0-04-ddc-write-amplification",
+    "11-13-p0-02-pipe-acl-and-ratelimit"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

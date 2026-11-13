@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/brighttray-helper/backend/ddc-ci.md", "reason": "The pacing, retry and write-verification rules that this task splits into write and verify"}
+{"file": ".trellis/spec/brighttray-helper/backend/pipe-protocol.md", "reason": "The pipe commands and the worker/coalescing model whose write path changes"}
+{"file": ".trellis/spec/brighttray-helper/backend/quality-guidelines.md", "reason": "The helper's required and forbidden patterns, including the write verification"}
+{"file": ".trellis/spec/brighttray-helper/backend/error-handling.md", "reason": "How a failed write is reported and when it is a stale handle"}

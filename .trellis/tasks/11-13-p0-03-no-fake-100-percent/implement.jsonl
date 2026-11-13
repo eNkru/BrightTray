@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/brighttray-hook/backend/hooking-contract.md", "reason": "What the hook reports to the shell; this task replaces the fake fallback with a known/unknown state"}
+{"file": ".trellis/spec/brighttray-hook/backend/quality-guidelines.md", "reason": "The hook's fail-safe rules: validate, catch panics, never block the caller"}
+{"file": ".trellis/spec/brighttray-hook/backend/error-handling.md", "reason": "The HRESULT conventions and the fall-back-to-original pattern this task extends"}
+{"file": ".trellis/spec/brighttray-hook/backend/logging-guidelines.md", "reason": "The log format the new 'brightness known' line must follow"}
