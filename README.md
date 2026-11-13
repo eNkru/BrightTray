@@ -2,72 +2,39 @@
 
 <img src="assets/banner.png" alt="BrightTray" width="100%">
 
-<h3>让台式机的 Windows 11 快速设置（Win + A）重新拥有亮度条，并通过 DDC/CI 直接调节外接显示器。</h3>
+<br>
+<br>
 
-<p>
-  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2011-2b2b2b?style=flat-square&labelColor=555555&logo=windows11&logoColor=white">
-  <img alt="Rust" src="https://img.shields.io/badge/built%20with-Rust-2b2b2b?style=flat-square&labelColor=555555&logo=rust&logoColor=white">
-  <img alt="Arch" src="https://img.shields.io/badge/arch-x64-2b2b2b?style=flat-square&labelColor=555555">
-  <img alt="No admin" src="https://img.shields.io/badge/admin-not%20required-2b2b2b?style=flat-square&labelColor=555555">
-  <img alt="Protocol" src="https://img.shields.io/badge/DDC%2FCI-VCP%200x10-2b2b2b?style=flat-square&labelColor=555555">
-</p>
+**English** · [简体中文](README.zh-CN.md)
 
-<p>
-  <a href="#-特性">特性</a> ·
-  <a href="#-快速开始">快速开始</a> ·
-  <a href="#-工作原理">工作原理</a> ·
-  <a href="#-命令行">命令行</a> ·
-  <a href="#-管道协议">管道协议</a> ·
-  <a href="#-常见问题">常见问题</a>
-</p>
+<br>
+
+<img alt="Windows 11" src="https://img.shields.io/badge/Windows%2011-24H2+-2b2b2b?style=flat-square&labelColor=555555&logo=windows11&logoColor=white">
+<img alt="Rust" src="https://img.shields.io/badge/Rust-x64-2b2b2b?style=flat-square&labelColor=555555&logo=rust&logoColor=white">
+<img alt="DDC/CI" src="https://img.shields.io/badge/DDC%2FCI-VCP%200x10-2b2b2b?style=flat-square&labelColor=555555">
+<img alt="No admin" src="https://img.shields.io/badge/admin-not%20required-2b2b2b?style=flat-square&labelColor=555555">
+
+<br>
+<br>
+
+<img src="docs/screenshots/en/demo.png" alt="Apply in BrightTray, and the brightness slider appears in Quick Settings" width="760">
 
 </div>
 
----
+<br>
 
-<div align="center">
-  <img src="docs/screenshots/quick-settings.png" alt="快速设置中的亮度条" width="420">
-  <br>
-  <sub>注入后，快速设置里出现原生亮度条；拖动即可调节外接显示器的背光。</sub>
-</div>
+Desktop PCs have no brightness slider in Quick Settings. BrightTray brings back the native one and wires it to your external monitor over DDC/CI.
 
-## 💡 为什么需要 BrightTray
+## Features
 
-笔记本上习以为常的亮度条，**在只接了外接显示器的台式机上是不存在的**。Windows 判断"没有能调亮度的屏幕"，于是快速设置直接把亮度磁贴藏了起来。
+- **Native** — the real Windows slider, not an overlay or a tray popup
+- **Two-way** — changes made on the monitor's OSD flow back to the slider
+- **Safe** — no hard-coded offsets; every patch is verified first, or skipped
+- **Light** — no admin rights, no system files touched, lives in the tray
 
-可实际上，绝大多数显示器都支持 **DDC/CI**，系统完全能通过显卡线路调节它们的背光，只是没有把这条路径接到 UI 上。
+## Quick start
 
-BrightTray 把这两头接了起来：
-
-- 不是另做一个悬浮窗或托盘滑块，而是**让 Windows 自己的亮度条出现**，外观、动画、键盘操作都和原生一致；
-- 拖动亮度条时，数值经命名管道交给后台 helper，由它通过 DDC/CI 写入显示器；
-- 在显示器 OSD 上手动改了亮度，滑块也会自动跟着刷新。
-
-## ✨ 特性
-
-| | |
-|---|---|
-| 🎚️ **原生体验** | 直接复用快速设置里的系统亮度条，没有额外窗口，也没有第三方 UI |
-| 🪟 **桌面应用** | Mica 质感的设置窗口：选择显示器、一键应用、开机自启，关闭后常驻托盘 |
-| 🖥️ **DDC/CI 直连** | 通过 `dxva2` 物理显示器 API 读写 VCP `0x10`（亮度），按显示器自身量程换算百分比 |
-| 🔁 **双向同步** | 外部改了亮度（OSD、其他工具）会回写到滑块；拖动后 1.2 秒内忽略回读，滑块不会"往回弹" |
-| ⚡ **合并写入** | DDC/CI 单条命令约 50 ms，连续拖动产生的写入只保留最新值，不排长队 |
-| 🛡️ **零硬编码地址** | 不依赖任何 RVA 或 PDB：通过导出函数拿到对象，再用 `get_Id` / `FriendlyName` 校验身份后才打补丁 |
-| 🧯 **失败即放弃** | vtable 不在模块范围内、ID 不匹配、导出缺失，都会直接放弃安装，不会弄崩 ShellHost |
-| ♻️ **自动续命** | 持续监视 ShellHost，进程重启后自动重新注入；桌面应用遇到已运行一段时间的 ShellHost 会先重启它，确保亮度条能出现 |
-| 🔓 **无需管理员** | ShellHost 以当前用户、中完整性级别运行，普通权限即可注入 |
-| 🔌 **开放接口** | 提供 `\\.\pipe\BrightTray` 文本协议，脚本或其他工具都能调用 |
-| 🔍 **只读诊断** | `probe` 子命令只查询、不打补丁，可在注入前先确认系统是否兼容 |
-
-## 🚀 快速开始
-
-### 环境要求
-
-- Windows 11 24H2 或更新版本（快速设置由 `ShellHost.exe` 承载）
-- 支持 **DDC/CI** 的外接显示器，并在显示器 OSD 中开启 DDC/CI
-- [Rust](https://rustup.rs/) 工具链（MSVC，x64）
-
-### 构建
+Requires Windows 11 24H2 or later and a monitor with DDC/CI enabled.
 
 ```powershell
 git clone <repo-url> BrightTray
@@ -75,235 +42,94 @@ cd BrightTray
 cargo build --release
 ```
 
-产物位于 `target\release\`：
-
-```text
-BrightTray.exe          # 桌面应用：选择显示器、托盘、开机自启
-brighttray-helper.exe   # 命令行版本：调试、脚本、无界面常驻
-brighttray_hook.dll     # 注入 ShellHost.exe 的 hook
-```
+Run `target\release\BrightTray.exe`, pick a display, click **Apply**, then press <kbd>Win</kbd> + <kbd>A</kbd>.
 
 > [!IMPORTANT]
-> `brighttray_hook.dll` 必须和 `BrightTray.exe` / `brighttray-helper.exe` 放在**同一目录**，程序默认从自身旁边加载它。
+> Keep `brighttray_hook.dll` in the same folder as the executable.
 
-### 使用桌面应用（推荐）
-
-<div align="center">
-  <img src="docs/screenshots/app.png" alt="BrightTray 桌面应用" width="400">
-</div>
-
-1. 运行 `BrightTray.exe`，窗口会列出所有已连接的显示器，并标出是否支持 DDC/CI 和当前亮度。
-2. 选中要控制的显示器。如果它**不支持 DDC/CI**，BrightTray 只会给出提示，不会做任何修改。
-3. 点击 **应用**，BrightTray 才开始工作：启动后台服务并挂接快速设置。
-   如果 ShellHost 已经运行了一段时间，它的快速设置面板可能已经缓存了"没有亮度条"，BrightTray 会自动重启一次 ShellHost（约 1 秒，系统会自动拉起），并在新进程启动的瞬间完成挂接。
-4. 按 <kbd>Win</kbd> + <kbd>A</kbd>，亮度条就会出现在音量滑块旁边。
-
-- **开机自启动**：写入当前用户的 `Run` 启动项。登录后直接在托盘中运行，并自动控制上次应用的显示器。
-- **托盘常驻**：关闭窗口只会收起到托盘，服务继续工作。单击托盘图标重新打开，在托盘菜单中选择"退出"才会真正退出。
-
-设置保存在 `%APPDATA%\BrightTray\config.ini`。程序只允许运行一个实例，再次启动会把已有窗口调到前台。界面语言跟随 Windows 显示语言（中文 / 英文），也可以用环境变量 `BRIGHTTRAY_LANG=en` 或 `zh` 指定。
-
-> [!NOTE]
-> 桌面应用依赖 WebView2 运行时，Windows 11 已自带。
-
-### 使用命令行
-
-```powershell
-# 1) 先确认显示器支持 DDC/CI
-target\release\brighttray-helper.exe list
-
-# 2) 启动常驻服务：管道服务 + 监视 ShellHost，首次以及重启后自动注入
-target\release\brighttray-helper.exe serve
-```
-
-`serve` 会控制所有支持 DDC/CI 的显示器。它与桌面应用共用同一个管道名，两者不能同时运行。
-
-<div align="center">
-  <img src="docs/screenshots/demo.png" alt="点击应用后，快速设置中出现亮度条" width="760">
-</div>
-
-## 🧠 工作原理
+## How it works
 
 ```mermaid
 flowchart LR
-    QS["⚙️ 快速设置 (Win+A)<br/>ControlCenter.dll"]
-    subgraph SH["ShellHost.exe"]
-        QA["QuickSetting<br/>(IQuickAction)"]
-        HOOK["🪝 brighttray_hook.dll"]
-    end
-    HELPER["🧩 brighttray-helper.exe<br/>serve"]
-    MON["🖥️ 外接显示器"]
-
-    QS -- "IsApplicable / GetValue / SetValue" --> QA
-    QA -. "vtable 已被替换" .-> HOOK
-    HOOK -- "\\.\pipe\BrightTray<br/>setall / getall" --> HELPER
-    HELPER -- "DDC/CI · VCP 0x10" --> MON
-    HELPER -. "CreateRemoteThread(LoadLibraryW)<br/>ShellHost 重启后自动重注入" .-> HOOK
+    QS["Quick Settings"] --> HOOK["brighttray_hook.dll<br/>in ShellHost.exe"]
+    HOOK -- "named pipe" --> HELPER["BrightTray"]
+    HELPER -- "DDC/CI" --> MON["Monitor"]
 ```
 
-1. **定位亮度磁贴**：亮度磁贴 `Microsoft.QuickAction.Brightness` 在 `QuickActionsDataModel.dll` 中是一个 `QuickSetting` 对象。hook 通过导出函数 `GetQuickActionsProvider` → `GetQuickActionByFriendlyName` 拿到实例，**不依赖任何偏移**。
-2. **校验后打补丁**：确认 vtable 和各个槽位都位于模块映像内、`get_Id` 返回 `SystemSettings_Display_Brightness` 之后，替换 `IsApplicable`、`IsEnabled`、`GetValue`、`SetValue` 以及属性变更事件等槽位。
-3. **只影响亮度实例**：该 vtable 由 Wi-Fi、蓝牙等所有磁贴共用，每个替换函数都会先用 `get_Id` 判断实例，非亮度磁贴原样转发给系统实现。
-4. **转发到 helper**：`SetValue("Value")` 把百分比经命名管道交给 helper；hook 本身从不直接操作显示器句柄。
-5. **回写 UI**：后台 watcher 定期读取 DDC 亮度，发现变化就调用已登记的 UI 事件处理器刷新滑块。
+A hook inside `ShellHost.exe` makes the hidden brightness tile applicable and forwards its value over a named pipe; the helper writes it to the monitor. The full reverse-engineering notes are in [docs/quick-settings-hook-research.md](docs/quick-settings-hook-research.md) (Chinese).
 
-完整的逆向分析、vtable 槽位表和实测记录见 **[docs/quick-settings-hook-research.md](docs/quick-settings-hook-research.md)**。
+## CLI
 
-## ⌨️ 命令行
+<details>
+<summary><code>brighttray-helper &lt;command&gt;</code></summary>
 
-```text
-brighttray-helper <command> [args]
-```
+<br>
 
-| 命令 | 说明 |
+| Command | Description |
 |---|---|
-| `list` | 列出所有物理显示器及其 DDC/CI 亮度（不带参数时的默认命令） |
-| `set <index> <0-100>` | 设置指定显示器的亮度百分比 |
-| `serve` | 常驻：启动管道服务，并在 ShellHost 启动或重启后自动注入 hook |
-| `inject [dll]` | 手动把 hook 注入当前所有 ShellHost 进程 |
-| `inject --early [dll]` | 以挂起方式重启 ShellHost，抢在它初始化前完成注入（备用方案） |
-| `probe` | 只读诊断：查询 `DisplayBrightness` 与 `QuickAction` 对象，不打补丁 |
-| `watch` | 打印 Windows 亮度滑块的变化（基于电源通知，用于调试） |
+| `list` | List monitors and their DDC/CI brightness |
+| `set <index> <0-100>` | Set one monitor's brightness |
+| `serve` | Run the pipe server and inject the hook, re-injecting when ShellHost restarts |
+| `inject [--early] [dll]` | Inject the hook manually |
+| `probe` | Read-only compatibility check |
+| `watch` | Print Windows brightness slider changes |
 
-| 环境变量 | 作用 |
+`serve` controls every DDC/CI monitor and cannot run alongside the desktop app.
+
+</details>
+
+<details>
+<summary>Pipe protocol — <code>\\.\pipe\BrightTray</code></summary>
+
+<br>
+
+One command per line, local connections only.
+
+| Command | Reply |
 |---|---|
-| `BRIGHTTRAY_NO_HOOK=1` | `serve` 只启动管道服务，不注入 hook |
+| `list` | `index\tcurrent\tmax\tdescription` per monitor, then an empty line |
+| `get <index>` | `current max`, or `err` |
+| `set <index> <0-100>` | none |
+| `getall` | brightness percent of the first DDC/CI monitor, or `err` |
+| `setall <0-100>` | none |
 
-## 🔌 管道协议
+</details>
 
-`\\.\pipe\BrightTray`：支持多个客户端同时连接，每行一条命令，仅接受本机连接。
-
-| 命令 | 回复 |
-|---|---|
-| `list` | 每台显示器一行 `index\tcurrent\tmax\tdescription`，以空行结束 |
-| `get <index>` | `current max`，失败时返回 `err` |
-| `set <index> <0-100>` | 无回复；连续设置会被合并 |
-| `getall` | 第一台支持 DDC/CI 的显示器的亮度百分比，失败时返回 `err` |
-| `setall <0-100>` | 无回复；应用到所有支持 DDC/CI 的显示器 |
-
-PowerShell 示例：
-
-```powershell
-$pipe = New-Object System.IO.Pipes.NamedPipeClientStream('.', 'BrightTray', 'InOut')
-$pipe.Connect(1000)
-$w = New-Object System.IO.StreamWriter($pipe); $w.AutoFlush = $true
-$r = New-Object System.IO.StreamReader($pipe)
-$w.WriteLine('getall'); $r.ReadLine()   # -> 72
-$w.WriteLine('setall 40')
-$pipe.Dispose()
-```
-
-## 🛡️ 安全与稳定性
-
-BrightTray 运行在系统 Shell 进程内部，因此把"不出事"放在第一位：
-
-- **DllMain 极简**：只启动工作线程，所有解析和打补丁都在 loader lock 释放之后进行。
-- **多重校验**：模块范围、vtable 槽位、`get_Id`、`FriendlyName` 任一不符就放弃安装。
-- **异常隔离**：每个替换函数都包在 `catch_unwind` 中，Rust panic 不会越过 COM 边界。
-- **引用安全**：登记的 UI handler 持有 AddRef，回调前再次 AddRef，避免并发移除导致悬垂指针。
-- **模块固定**：hook DLL 用 `GET_MODULE_HANDLE_EX_FLAG_PIN` 固定自身，vtable 仍指向它时不会被卸载。
-- **职责分离**：hook 只做 UI 绑定，所有 DDC/CI 操作都在 helper 进程中完成。
-
-## ✅ 已验证环境
-
-| 项目 | 版本 / 型号 |
-|---|---|
-| 系统 | Windows 11 Insider，build 26300 |
-| 显示器 | Lenovo Y27q-30（DDC/CI） |
-| 相关模块 | `QuickActionsDataModel.dll`、`SettingsHandlers_PCDisplay.dll`（随系统更新变化，安装前会自动校验） |
-
-欢迎提交 Issue 补充你的系统版本与显示器型号。
-
-## ❓ 常见问题
+## FAQ
 
 <details>
-<summary><b>亮度条没有出现？</b></summary>
+<summary>The slider doesn't appear</summary>
 
-1. 先运行 `brighttray-helper list`，确认显示器能读到亮度；读不到时请在显示器 OSD 里开启 DDC/CI。
-2. 查看 hook 日志 `%TEMP%\brighttray-hook.log`，应能看到 `IQuickAction hook installed`。
-3. 如果日志显示校验失败，说明系统更新改变了接口布局，请附上日志提交 Issue。
-4. 使用命令行时，晚注入的 ShellHost 可能已经缓存了"没有亮度条"：运行 `taskkill /F /IM ShellHost.exe` 让 `serve` 在新进程启动时重新注入，或使用 `inject --early`。桌面应用会自动处理这种情况。
+<br>
+
+Run `brighttray-helper list` to confirm the monitor reports a brightness; if it doesn't, enable DDC/CI in the monitor's OSD. Then check `%TEMP%\brighttray-hook.log` for `IQuickAction hook installed`.
 
 </details>
 
 <details>
-<summary><b>杀毒软件报警？</b></summary>
+<summary>My antivirus flags it</summary>
 
-BrightTray 通过 `CreateRemoteThread(LoadLibraryW)` 把 DLL 注入 `ShellHost.exe`，部分安全软件会把这种远程线程注入视为可疑行为。代码完全开源，可以自行审阅并构建。
+<br>
 
-</details>
-
-<details>
-<summary><b>多台显示器怎么处理？</b></summary>
-
-桌面应用中，快速设置的亮度条只控制你选中并应用的那台显示器，可以随时切换。命令行 `serve` 则通过 `setall` 同步调节**所有**支持 DDC/CI 的显示器，读取时以第一台为准。需要单独调节时，可以用 `set <index> <p>` 或管道协议。
+BrightTray loads a DLL into `ShellHost.exe` with `CreateRemoteThread`, which some security software treats as suspicious. The source is all here to audit and build yourself.
 
 </details>
 
 <details>
-<summary><b>如何卸载？</b></summary>
+<summary>How do I uninstall it?</summary>
 
-先关闭"开机自启动"，再在托盘菜单中选择"退出"（或结束 `brighttray-helper.exe`），然后重启 ShellHost（或注销 / 重启系统）即可。除了开机自启动用到的 `Run` 启动项，BrightTray 不修改注册表，也不改动任何系统文件；设置保存在 `%APPDATA%\BrightTray`，可直接删除。
+<br>
 
-</details>
-
-<details>
-<summary><b>Windows 以后会原生支持吗？</b></summary>
-
-有可能。`SettingsHandlers_PCDisplay.dll` 中已经存在未开放的 `Feature_ExternalBrightness` 特性开关，详见 [研究文档 §4](docs/quick-settings-hook-research.md#4-顺带发现windows-自带的外接屏-ddcci-亮度未开放)。如果系统正式放出该功能，BrightTray 就可以退役了。
+Turn off **Start with Windows**, choose **Exit** from the tray menu, then sign out or restart ShellHost. Settings live in `%APPDATA%\BrightTray`.
 
 </details>
 
-## 🗺️ Roadmap
+## Disclaimer
 
-- [x] DDC/CI 读写与命名管道服务
-- [x] 快速设置亮度条注入（`IQuickAction` hook）
-- [x] 外部亮度变化回写 UI
-- [x] ShellHost 重启后自动重注入
-- [x] 桌面应用：显示器选择、托盘图标与右键菜单
-- [x] 开机自启（无控制台窗口）
-- [ ] 多显示器独立滑块
-- [ ] 安装包与签名发布
+BrightTray patches undocumented internals of the Windows shell. A system update may break it. Use at your own risk.
 
-## 📁 项目结构
-
-```text
-BrightTray/
-├── app/                    # BrightTray.exe 桌面应用
-│   ├── src/
-│   │   ├── main.rs         # 窗口、WebView、托盘、状态管理
-│   │   ├── autostart.rs    # 开机自启（HKCU Run）
-│   │   ├── config.rs       # 设置持久化
-│   │   └── instance.rs     # 单实例
-│   └── ui/index.html       # 界面
-├── helper/                 # brighttray 核心库 + brighttray-helper.exe
-│   └── src/
-│       ├── lib.rs          # 供 app 复用的核心库
-│       ├── main.rs         # 命令行入口
-│       ├── ddc.rs          # DDC/CI 物理显示器访问
-│       ├── server.rs       # 命名管道服务与写入合并
-│       ├── inject.rs       # 远程线程注入、ShellHost 监视
-│       ├── slider.rs       # 订阅系统亮度滑块（电源通知）
-│       └── probe.rs        # 只读兼容性诊断
-├── hook/                   # brighttray_hook.dll
-│   └── src/
-│       ├── lib.rs          # ISettingItem / IQuickAction vtable hook
-│       └── pipe.rs         # helper 管道客户端
-├── assets/                 # 图标与横幅
-└── docs/                   # 逆向研究与截图
-```
-
-## ⚠️ 免责声明
-
-BrightTray 会向系统 Shell 进程注入代码并修改其内存中的虚函数表，这依赖未公开的系统内部接口。尽管每一步都做了校验与降级，系统更新仍可能导致它失效。使用风险由使用者自行承担。
-
-## 📄 License
-
-暂未指定许可证。<!-- TODO: 添加 LICENSE 文件（例如 MIT），并在此处更新 -->
+<br>
 
 <div align="center">
-<br>
-<img src="assets/icon-256.png" width="64" alt="BrightTray icon">
-<br>
-<sub>Made with ☀️ and Rust</sub>
+<img src="assets/icon-256.png" width="48" alt="">
 </div>
