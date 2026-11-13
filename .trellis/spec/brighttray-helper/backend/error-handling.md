@@ -26,6 +26,12 @@ decide whether to warn the user (`app/src/main.rs`) or skip it
 | `1` | the command failed (`ExitCode::FAILURE`) |
 | `2` | the arguments were wrong (`usage()`) |
 
+`usage()` also covers a flag that is only valid in combination with another one.
+`inject --early` ends every running ShellHost, so it needs `--force-restart` as
+well; without it the CLI prints the consequence and exits with code 2 without
+touching any process. `--force-restart` on its own is a usage error too — it
+means nothing without `--early`.
+
 Every failure prints to **stderr** with `eprintln!` and returns
 `ExitCode::FAILURE`. Successful output goes to stdout with `println!` — the
 CLI is meant to be piped, so keep machine-readable results on stdout and

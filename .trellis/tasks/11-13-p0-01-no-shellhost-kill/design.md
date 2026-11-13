@@ -99,12 +99,13 @@ dialog and adding one is a larger UI change than this task should make.
 
 Clicking it:
 
-1. If the watcher is not running yet (the user has not applied a display),
-   the app shows the notice "请先应用一个显示器" / "Apply a display first" and
-   does nothing.
+1. If the watcher is not running yet (the user has not applied a display, or
+   the hook DLL could not be extracted), the app shows the notice "请先应用一个显示器" /
+   "Apply a display first" and does nothing.
 2. Otherwise it calls `inject::restart_shellhost()`.
-3. On success the status line goes through the existing `waiting` state
-   ("等待 ShellHost…") and back to `hooked` once the new process is hooked.
+3. On success the status line follows the watcher on its own: it reports the
+   shell as gone and then as hooked again. The app does not set the hook state
+   itself, because that would race with the watcher's report.
 4. On failure the error goes into `App::error` like any other failure.
 
 The app's event loop gains a `UserEvent` for the result, because
@@ -112,7 +113,37 @@ The app's event loop gains a `UserEvent` for the result, because
 thread should not block on it. A short `std::thread::spawn` that sends back
 the result keeps the rule "the event loop thread only does UI work".
 
-## Decision 4 — The CLI needs a second flag
+**A notice that only lives in the page would be invisible.** The app usually
+lives in the tray, so both error paths bring the window forward first
+(`App::show_notice()`), the same way `App::show()` does.
+
+**`watcher_started` is only set once the watcher thread exists** — that is,
+after `hookdll::extract()` succeeded. Otherwise the tray item would offer a
+restart that nothing re-injects into, and a failed extraction would
+permanently disable the watcher.
+
+## Decision 4 — The watcher identifies a process, not a pid
+
+A restarted ShellHost may get the pid of the old one. The watcher remembers
+which processes have the hook, and a bare pid is not enough to tell "the same
+process" from "a new process that reused the number". So the remembered
+identity is the pid **and** the process creation time:
+
+```rust
+// pid -> creation time of the process that has the hook.
+let mut hooked: std::collections::HashMap<u32, Option<u64>> = …
+```
+
+The creation time costs one `OpenProcess` + `GetProcessTimes` per ShellHost
+per tick, next to the process snapshot the watcher already takes — negligible
+compared to that snapshot, which walks every process in the system.
+
+The same identity check also settles the transient error: a ShellHost that is
+on its way out cannot be injected into, and failing to inject into a process
+that is already exiting is not an error worth showing. `process_gone(pid)`
+asks `GetExitCodeProcess` whether the process is still `STILL_ACTIVE`.
+
+## Decision 5 — The CLI needs a second flag
 
 `inject --early` is a destructive operation. The CLI becomes:
 
@@ -132,7 +163,7 @@ The alternative — dropping `--early` altogether — was rejected: the early
 path is the only recovery for a shell that caches the capability too early,
 and the audit explicitly asks for it to stay behind an explicit flag.
 
-## Decision 5 — Remove the dead `WatchEvent::Restarting`
+## Decision 6 — Remove the dead `WatchEvent::Restarting`
 
 The variant, its `Display` arm, the `push_state()` arm and the page's
 `statusOf()` arm and its `restarting` string all go. The page's `STRINGS`

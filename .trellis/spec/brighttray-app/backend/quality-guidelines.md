@@ -52,23 +52,26 @@ Rules:
 
   Do not make it transparent to "fix" a colour issue.
 
-## The app restarts ShellHost
+## The app never restarts ShellHost automatically
 
-The app asks the watcher to restart a long-running ShellHost:
+The app's watcher only injects:
 
 ```rust
-// Restart a ShellHost that has been up for a while: its Quick Settings
-// panel may already have cached "no brightness".
-inject::watch_and_inject(dll, true, move |event| { … });
+// The watcher only injects; it never ends a ShellHost process. A shell
+// that already cached "no brightness" is handled by the tray menu's
+// explicit restart.
+inject::watch_and_inject(dll, move |event| {
+    let _ = proxy.send_event(UserEvent::Watch(event.clone()));
+});
 ```
 
-The `true` is `restart_stale`: a ShellHost that has been alive for more than
-10 s is terminated (and restarted by `sihost`) so that the hook is in place
-before Quick Settings builds its panel. The user sees the Start menu and
-Quick Settings disappear briefly.
+Ending the shell is visible to the user — the Start menu and Quick Settings
+disappear until Windows starts it again — so it only happens when the user
+picks **Restart ShellHost** from the tray menu. The item's label states the
+consequence, because the tray menu has no confirmation dialog.
 
-The CLI does **not** do this — `brighttray-helper serve` passes `false`. The
-difference is deliberate in the code, and the flag is the whole difference.
+The CLI has the same capability behind a flag:
+`brighttray-helper inject --early --force-restart`.
 
 ## Single instance
 
@@ -133,6 +136,7 @@ deleted on the next run.
 | Making the WebView transparent | It leaves ghost text behind (see the comment in `main.rs`) |
 | Showing the window before the page has sized it | The window jumps while it appears |
 | Duplicating helper logic in the app | Two implementations of DDC/CI, one pipe protocol, two bugs |
+| Ending a ShellHost process without the user asking | The Start menu and Quick Settings disappear while it is down |
 
 ## Testing
 

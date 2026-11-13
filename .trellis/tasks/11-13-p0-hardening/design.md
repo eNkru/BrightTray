@@ -109,7 +109,7 @@ Every change is local to one file cluster and can be reverted independently:
 
 | Task | Files | Revert |
 |------|-------|--------|
-| P0-01 | `helper/src/inject.rs`, `app/src/main.rs` | restore `watch_and_inject(dll, true, …)` |
+| P0-01 | `helper/src/inject.rs`, `app/src/main.rs` | restore the `restart_stale` parameter and the stale branch, drop the tray item and the `--force-restart` guard |
 | P0-03 | `hook/src/lib.rs` | restore the `AtomicU32` + fallback constant |
 | P0-04 | `helper/src/ddc.rs`, `helper/src/server.rs` | restore the verified write in `flush()` |
 | P0-02 | `helper/src/server.rs`, `helper/Cargo.toml` | restore `SECURITY_ATTRIBUTES = None` and drop the bucket |

@@ -71,7 +71,6 @@ build this string by hand.
 | – (app internal) | `starting` | "正在挂接快速设置…" |
 | `Hooked` | `hooked` | "运行中" / "Running" |
 | `NoShellHost` | `waiting` | "等待 ShellHost…" |
-| `Restarting` | `restarting` | "正在重启 ShellHost…" |
 | `DllMissing` | `missing` | "找不到 brighttray_hook.dll" |
 | `Error(msg)` | `error` (+ `message`) | the message |
 

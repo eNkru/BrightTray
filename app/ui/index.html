@@ -241,7 +241,7 @@
       primary: "主", active: "控制中", noDdc: "不支持 DDC/CI", empty: "没有检测到显示器",
       noDdcNotice: "该显示器未响应 DDC/CI，不会做任何修改。可在显示器菜单中开启 DDC/CI 后刷新。",
       idle: "未启用", running: "运行中", waiting: "等待 ShellHost…", hooking: "正在挂接快速设置…",
-      restarting: "正在重启 ShellHost…", missing: "找不到 brighttray_hook.dll", starting: "启动中…",
+      missing: "找不到 brighttray_hook.dll", starting: "启动中…",
     },
     en: {
       displays: "Displays", autostart: "Start with Windows", apply: "Apply", applied: "Applied",
@@ -249,7 +249,7 @@
       primary: "Main", active: "Active", noDdc: "No DDC/CI", empty: "No displays found",
       noDdcNotice: "This display doesn't respond to DDC/CI, so nothing will be changed. Turn on DDC/CI in the monitor's menu, then refresh.",
       idle: "Not active", running: "Running", waiting: "Waiting for ShellHost…", hooking: "Hooking Quick Settings…",
-      restarting: "Restarting ShellHost…", missing: "brighttray_hook.dll not found", starting: "Starting…",
+      missing: "brighttray_hook.dll not found", starting: "Starting…",
     },
   };
   const T = STRINGS[document.documentElement.lang] || STRINGS.en;
@@ -276,7 +276,6 @@
       case "hooked": return { cls: "on", text: T.running };
       case "waiting": return { cls: "pending", text: T.waiting };
       case "starting": return { cls: "pending", text: T.hooking };
-      case "restarting": return { cls: "pending", text: T.restarting };
       case "missing": return { cls: "err", text: T.missing };
       case "error": return { cls: "err", text: s.hook.message };
       default: return { cls: "pending", text: T.starting };

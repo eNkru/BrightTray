@@ -46,7 +46,7 @@ the first argument at the end of `main`.
 |--------|------|----------|
 | `ddc` | The only place that calls the dxva2 API. Monitor enumeration, brightness read/write, monitor identity | Know about the pipe, the app or the hook |
 | `server` | The pipe protocol, the worker thread that owns the monitor handles, the `Target` that selects which monitors `getall`/`setall` act on | Talk to the UI or to the registry |
-| `inject` | Finding ShellHost, `CreateRemoteThread(LoadLibraryW)` injection, the early-inject path, the watcher | Patch memory itself — that is the hook's job |
+| `inject` | Finding ShellHost, `CreateRemoteThread(LoadLibraryW)` injection, the early-inject path, the watcher, the explicit `restart_shellhost()` | Patch memory itself — that is the hook's job |
 | `slider` | Subscribing to `GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS` | Assume the value is a monitor brightness it can set |
 | `probe` | A read-only diagnostic that prints what the shell's setting object answers | Change anything; it must stay safe to run on a live machine |
 
@@ -56,6 +56,10 @@ both. `ddc` depends on nothing in the crate.
 Two hard-coded system paths live in `inject.rs`:
 `C:\Windows\System32\ShellHost.exe` (the early-inject path starts this
 executable) and the DLL name `brighttray_hook.dll`.
+
+`inject.rs` holds the only two code paths that end a ShellHost process, and
+both are behind the user's consent — see its
+[Quality Guidelines](./quality-guidelines.md).
 
 ## Where new code goes
 

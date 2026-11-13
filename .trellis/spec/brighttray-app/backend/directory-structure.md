@@ -32,7 +32,7 @@ The binary is named `BrightTray` (capital B) while the package is
 | `autostart.rs` | The `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` entry |
 | `hookdll.rs` | Extracts the embedded `brighttray_hook.dll` to disk so ShellHost can `LoadLibraryW` it |
 
-`main.rs` is large (~530 lines) but it is one file on purpose: the app has one
+`main.rs` is large (~600 lines) but it is one file on purpose: the app has one
 event loop, one state struct and one page. Split it only when a module has a
 clear boundary of its own, the way `config` / `i18n` / `instance` /
 `autostart` / `hookdll` do.
@@ -72,7 +72,9 @@ use brighttray::server::{Server, Target};
   reach it.
 - `server::Target` — which display `getall`/`setall` act on.
 - `inject::watch_and_inject` — keeps the hook present across ShellHost
-  restarts.
+  restarts. It never ends a ShellHost process.
+- `inject::restart_shellhost` — ends every ShellHost, for the tray menu's
+  explicit restart.
 
 ## `build.rs` does two things
 

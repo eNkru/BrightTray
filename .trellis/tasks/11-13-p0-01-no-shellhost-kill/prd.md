@@ -74,10 +74,21 @@ exit code (2). It must not terminate anything.
 
 ## Acceptance criteria
 
-- [ ] `grep -n "TerminateProcess" helper/src/inject.rs` shows the calls only
-      in the explicit restart helper and in `inject_early`.
-- [ ] No code path in `watch_and_inject` reaches `TerminateProcess`.
-- [ ] `app/src/main.rs` starts the watcher without asking for a restart.
+Checked here (statically):
+
+- [x] `grep -n "TerminateProcess" helper/src/inject.rs` shows two lines: the
+      import and exactly one call site — the private `terminate_shellhost(pid)`
+      helper. Both the explicit restart and `inject_early` go through it.
+- [x] No code path in `watch_and_inject` reaches `TerminateProcess`.
+- [x] `app/src/main.rs` starts the watcher without asking for a restart.
+- [x] `WatchEvent::Restarting` and the `restarting` UI string are gone from
+      both the Rust side and the page.
+- [x] The helper and app package specs describe the new behaviour.
+
+For the Windows machine (this environment has no Rust toolchain and the
+`windows` crate has no non-Windows target, so none of these could be run
+here):
+
 - [ ] **Windows check:** start `BrightTray.exe`, note the ShellHost pid, press
       **Apply**, and confirm the pid is unchanged afterwards and during the
       apply.
@@ -90,11 +101,8 @@ exit code (2). It must not terminate anything.
 - [ ] `brighttray-helper inject --early` (without `--force-restart`) prints an
       explanation, terminates nothing, and exits with code 2.
 - [ ] `brighttray-helper inject --early --force-restart` still works.
-- [ ] `WatchEvent::Restarting` and the `restarting` UI string are gone from
-      both the Rust side and the page.
 - [ ] `cargo build --release`, `cargo clippy --workspace --all-targets` and
       `cargo fmt --check` are clean **on Windows**.
-- [ ] The helper and app package specs describe the new behaviour.
 
 ## Out of scope
 

@@ -1,27 +1,29 @@
 # Quality Guidelines
 
-## The helper terminates ShellHost on purpose
+## The helper never terminates ShellHost on its own
 
 Two paths in `helper/src/inject.rs` end a ShellHost process with
-`TerminateProcess`:
+`TerminateProcess`, and both need the user's consent:
 
-- `inject_early()` kills **every** running ShellHost before starting a
-  suspended replacement.
-- `watch_and_inject(dll, restart_stale = true, …)` kills a ShellHost that has
-  been running for more than `FRESH_SHELLHOST = 10 s`, once per
-  `RESTART_COOLDOWN = 60 s`.
+- `inject::restart_shellhost()` ends every running ShellHost. The app's tray
+  menu has an item that calls it, so the user asks for it by clicking.
+- `inject::inject_early()` ends every running ShellHost before starting a
+  suspended replacement. The CLI gates it behind `--force-restart`.
 
-The reason is that Quick Settings caches which tiles are applicable when its
-panel is built; a hook that arrives later than that may be too late for the
-brightness slider to appear.
+`inject::watch_and_inject` **never** ends a process. It only injects into a
+ShellHost that is running and does not have the hook yet, and it does so
+whether the shell is five seconds or five hours old. Injecting into a
+running ShellHost is enough, because the `IQuickAction` hook answers every
+later query.
 
-`brighttray-helper serve` calls `watch_and_inject(dll, false, …)` — the CLI
-never restarts the shell. The **app** calls it with `true`; see the app
-package's [Quality Guidelines](../../brighttray-app/backend/quality-guidelines.md).
+The reason the restart exists at all is that Quick Settings caches which tiles
+are applicable when it builds its panel; a hook that arrives later than that
+may be too late for the brightness slider to appear. That is a fallback for a
+few Windows builds, not the normal path.
 
 Killing the shell is visible to the user: the Start menu and Quick Settings
-disappear for a moment. Treat this path as something that needs an explicit
-reason, not as a default.
+disappear for a moment. Treat it as something that needs an explicit reason,
+never as a default.
 
 ## Required patterns
 
@@ -54,6 +56,7 @@ reason, not as a default.
 | Adding a logging or argument-parsing crate | The project deliberately has neither; see [Logging Guidelines](./logging-guidelines.md) |
 | Swallowing an error without a reason | The error text is the only diagnostic the user gets |
 | Blocking the pipe worker | A slow DDC/CI call must not stall other clients; the worker batches commands instead |
+| Ending a ShellHost process from an automatic path | The Start menu and Quick Settings disappear while it is down; only the tray menu item and `--early --force-restart` may do it |
 
 ## Testing
 
