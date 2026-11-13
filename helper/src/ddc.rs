@@ -1,6 +1,8 @@
 //! DDC/CI brightness access through the Windows physical monitor API (dxva2.dll).
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Devices::Display::{
     DestroyPhysicalMonitor, DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes,
@@ -20,6 +22,11 @@ const VCP_BRIGHTNESS: u8 = 0x10;
 /// Some monitors drop a DDC/CI command now and then; retry a few times.
 const RETRIES: u32 = 3;
 const RETRY_DELAY_MS: u64 = 60;
+/// DDC/CI wants roughly 50 ms between two commands to the same monitor. Stricter monitors
+/// silently drop a command that follows another one too closely.
+const COMMAND_GAP: Duration = Duration::from_millis(50);
+/// How many times a brightness write is sent again when reading back shows it did not land.
+const VERIFY_RESENDS: u32 = 2;
 /// `MONITORINFOF_PRIMARY`.
 const PRIMARY_FLAG: u32 = 1;
 
@@ -49,9 +56,27 @@ pub struct Monitor {
     pub width: i32,
     pub height: i32,
     pub primary: bool,
+    /// When the last DDC/CI command to this monitor finished, to keep [`COMMAND_GAP`].
+    last_command: Cell<Option<Instant>>,
+    /// The monitor's brightness range, remembered so a write does not need a read first.
+    max: Cell<Option<u32>>,
 }
 
 impl Monitor {
+    /// Waits until the monitor is ready for its next command.
+    fn pace(&self) {
+        if let Some(last) = self.last_command.get() {
+            let since = last.elapsed();
+            if since < COMMAND_GAP {
+                std::thread::sleep(COMMAND_GAP - since);
+            }
+        }
+    }
+
+    fn mark(&self) {
+        self.last_command.set(Some(Instant::now()));
+    }
+
     /// Identifies this monitor across enumerations as long as the display layout is unchanged.
     pub fn key(&self) -> String {
         format!("{}#{}|{}", self.device, self.sub_index, self.name)
@@ -61,6 +86,7 @@ impl Monitor {
         for attempt in 0..RETRIES {
             let mut current = 0u32;
             let mut max = 0u32;
+            self.pace();
             let ok = unsafe {
                 GetVCPFeatureAndVCPFeatureReply(
                     self.handle,
@@ -70,7 +96,9 @@ impl Monitor {
                     Some(&mut max),
                 )
             };
+            self.mark();
             if ok != 0 && max > 0 {
+                self.max.set(Some(max));
                 return Some(Brightness { current, max });
             }
             if attempt + 1 < RETRIES {
@@ -80,21 +108,48 @@ impl Monitor {
         None
     }
 
-    /// Sets brightness as a percentage (0-100), scaled to the monitor's own range.
-    pub fn set_brightness_percent(&self, percent: u32) -> bool {
-        let Some(b) = self.brightness() else {
-            return false;
-        };
-        let value = (percent.min(100) * b.max + 50) / 100;
+    /// Sends one brightness write. True when the command went out.
+    fn write_raw(&self, value: u32) -> bool {
         for attempt in 0..RETRIES {
-            if unsafe { SetVCPFeature(self.handle, VCP_BRIGHTNESS, value) } != 0 {
+            self.pace();
+            let ok = unsafe { SetVCPFeature(self.handle, VCP_BRIGHTNESS, value) } != 0;
+            self.mark();
+            if ok {
                 return true;
             }
             if attempt + 1 < RETRIES {
-                std::thread::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS));
+                std::thread::sleep(Duration::from_millis(RETRY_DELAY_MS));
             }
         }
         false
+    }
+
+    /// Sets brightness as a percentage (0-100), scaled to the monitor's own range.
+    ///
+    /// `SetVCPFeature` succeeding only means the command was sent, so the value is read back
+    /// and sent again if the monitor did not take it. Returns false when the command could not
+    /// be sent at all (a stale handle); a monitor that keeps ignoring the write still counts as
+    /// reached, since asking again will not change its mind.
+    pub fn set_brightness_percent(&self, percent: u32) -> bool {
+        let max = match self.max.get() {
+            Some(max) => max,
+            None => match self.brightness() {
+                Some(b) => b.max,
+                None => return false,
+            },
+        };
+        let value = (percent.min(100) * max + 50) / 100;
+        for _ in 0..=VERIFY_RESENDS {
+            if !self.write_raw(value) {
+                return false;
+            }
+            match self.brightness() {
+                Some(b) if b.current != value => continue,
+                // Landed, or the monitor does not answer right now: nothing to compare with.
+                _ => break,
+            }
+        }
+        true
     }
 }
 
@@ -222,6 +277,8 @@ unsafe extern "system" fn collect(
             width: area.right - area.left,
             height: area.bottom - area.top,
             primary,
+            last_command: Cell::new(None),
+            max: Cell::new(None),
         });
     }
     TRUE
