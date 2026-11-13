@@ -7,11 +7,15 @@ fn usage() -> ExitCode {
     eprintln!("  brighttray-helper list");
     eprintln!("  brighttray-helper set <index> <percent 0-100>");
     eprintln!("  brighttray-helper serve          (pipe server, also keeps the shell hook loaded)");
-    eprintln!("  brighttray-helper inject [--early] [dll]");
+    eprintln!("  brighttray-helper inject [--early --force-restart] [dll]");
     eprintln!("                                   (patch ShellHost's brightness setting)");
     eprintln!(
         "    --early                        restart ShellHost suspended, inject before it boots"
     );
+    eprintln!(
+        "    --force-restart                required by --early: --early ends every ShellHost"
+    );
+    eprintln!("                                   process, so the Start menu disappears briefly");
     eprintln!("  brighttray-helper probe          (query the brightness setting, no patching)");
     eprintln!("  brighttray-helper watch          (print Windows brightness slider changes)");
     ExitCode::from(2)
@@ -22,13 +26,28 @@ fn main() -> ExitCode {
 
     if args.first().map(String::as_str) == Some("inject") {
         let mut early = false;
+        let mut force_restart = false;
         let mut dll_argument = None;
         for argument in &args[1..] {
             if argument == "--early" {
                 early = true;
+            } else if argument == "--force-restart" {
+                force_restart = true;
             } else {
                 dll_argument = Some(argument.clone());
             }
+        }
+        if early && !force_restart {
+            eprintln!("inject --early ends every running ShellHost process first.");
+            eprintln!("The Start menu and Quick Settings disappear until Windows starts it again.");
+            eprintln!("Add --force-restart if that is what you want:");
+            eprintln!("  brighttray-helper inject --early --force-restart");
+            return usage();
+        }
+        if force_restart && !early {
+            eprintln!("--force-restart only applies to --early.");
+            eprintln!("  brighttray-helper inject --early --force-restart");
+            return usage();
         }
         let dll = match dll_argument {
             Some(path) => std::path::PathBuf::from(path),
@@ -84,7 +103,7 @@ fn main() -> ExitCode {
         if std::env::var_os("BRIGHTTRAY_NO_HOOK").is_none() {
             match inject::default_dll_path() {
                 Ok(dll) => {
-                    inject::watch_and_inject(dll, false, |event| eprintln!("hook watcher: {event}"))
+                    inject::watch_and_inject(dll, |event| eprintln!("hook watcher: {event}"))
                 }
                 Err(e) => eprintln!("hook watcher: {e}"),
             }
