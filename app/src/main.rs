@@ -5,6 +5,7 @@
 
 mod autostart;
 mod config;
+mod hookdll;
 mod i18n;
 mod instance;
 
@@ -241,7 +242,7 @@ impl App {
         if !self.watcher_started {
             self.watcher_started = true;
             self.hook = Hook::Starting;
-            match inject::default_dll_path() {
+            match hookdll::extract() {
                 Ok(dll) => {
                     let proxy = self.proxy.clone();
                     // Restart a ShellHost that has been up for a while: its Quick Settings

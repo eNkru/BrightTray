@@ -37,15 +37,14 @@ Desktop PCs have no brightness slider in Quick Settings. BrightTray brings back 
 Requires Windows 11 24H2 or later and a monitor with DDC/CI enabled.
 
 ```powershell
-git clone <repo-url> BrightTray
+git clone https://github.com/cestbon0309/BrightTray.git
 cd BrightTray
 cargo build --release
 ```
 
 Run `target\release\BrightTray.exe`, pick a display, click **Apply**, then press <kbd>Win</kbd> + <kbd>A</kbd>.
 
-> [!IMPORTANT]
-> Keep `brighttray_hook.dll` in the same folder as the executable.
+`BrightTray.exe` is a single self-contained file — copy it anywhere.
 
 ## How it works
 
@@ -74,7 +73,7 @@ A hook inside `ShellHost.exe` makes the hidden brightness tile applicable and fo
 | `probe` | Read-only compatibility check |
 | `watch` | Print Windows brightness slider changes |
 
-`serve` controls every DDC/CI monitor and cannot run alongside the desktop app.
+`serve` controls every DDC/CI monitor and cannot run alongside the desktop app. Unlike the app, the helper needs `brighttray_hook.dll` next to it.
 
 </details>
 
@@ -120,7 +119,7 @@ BrightTray loads a DLL into `ShellHost.exe` with `CreateRemoteThread`, which som
 
 <br>
 
-Turn off **Start with Windows**, choose **Exit** from the tray menu, then sign out or restart ShellHost. Settings live in `%APPDATA%\BrightTray`.
+Turn off **Start with Windows**, choose **Exit** from the tray menu, then sign out or restart ShellHost. Then delete `%APPDATA%\BrightTray`, which holds the settings and the extracted hook.
 
 </details>
 

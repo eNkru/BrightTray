@@ -37,15 +37,14 @@
 需要 Windows 11 24H2 或更新版本，以及开启了 DDC/CI 的显示器。
 
 ```powershell
-git clone <repo-url> BrightTray
+git clone https://github.com/cestbon0309/BrightTray.git
 cd BrightTray
 cargo build --release
 ```
 
 运行 `target\release\BrightTray.exe`，选中显示器，点击 **应用**，然后按 <kbd>Win</kbd> + <kbd>A</kbd>。
 
-> [!IMPORTANT]
-> `brighttray_hook.dll` 必须和可执行文件放在同一目录。
+`BrightTray.exe` 是独立的单文件，可以拷贝到任意位置使用。
 
 ## 工作原理
 
@@ -74,7 +73,7 @@ flowchart LR
 | `probe` | 只读的兼容性检查 |
 | `watch` | 打印 Windows 亮度滑块的变化 |
 
-`serve` 会控制所有支持 DDC/CI 的显示器，不能和桌面应用同时运行。
+`serve` 会控制所有支持 DDC/CI 的显示器，不能和桌面应用同时运行。与桌面应用不同，helper 需要 `brighttray_hook.dll` 放在它旁边。
 
 </details>
 
@@ -120,7 +119,7 @@ BrightTray 通过 `CreateRemoteThread` 把 DLL 加载进 `ShellHost.exe`，部�
 
 <br>
 
-关闭 **开机自启动**，在托盘菜单中选择 **退出**，然后注销或重启 ShellHost。设置保存在 `%APPDATA%\BrightTray`。
+关闭 **开机自启动**，在托盘菜单中选择 **退出**，然后注销或重启 ShellHost。最后删除 `%APPDATA%\BrightTray`，里面是设置和释放出的 hook。
 
 </details>
 

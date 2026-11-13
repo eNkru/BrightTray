@@ -1,5 +1,49 @@
+use std::env;
+use std::path::PathBuf;
+use std::process::Command;
+
 fn main() {
     println!("cargo:rerun-if-changed=app.rc");
     println!("cargo:rerun-if-changed=../assets/icon.ico");
     embed_resource::compile("app.rc", embed_resource::NONE);
+
+    build_hook();
+}
+
+/// Builds `brighttray_hook.dll` and leaves it in `OUT_DIR`, where `src/hookdll.rs` embeds it
+/// into BrightTray.exe.
+///
+/// The outer cargo holds a lock on its target directory while this script runs, so the nested
+/// build gets a target directory of its own under `OUT_DIR`.
+fn build_hook() {
+    println!("cargo:rerun-if-changed=../hook/src");
+    println!("cargo:rerun-if-changed=../hook/Cargo.toml");
+    println!("cargo:rerun-if-changed=../Cargo.toml");
+    println!("cargo:rerun-if-changed=../Cargo.lock");
+
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
+    let workspace = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"))
+        .join("..");
+    let target = env::var("TARGET").expect("TARGET");
+    let profile = env::var("PROFILE").expect("PROFILE");
+    let target_dir = out_dir.join("hook-target");
+
+    let mut cargo = Command::new(env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+    cargo
+        .current_dir(&workspace)
+        .args(["build", "-p", "brighttray-hook", "--target", &target])
+        .arg("--target-dir")
+        .arg(&target_dir);
+    if profile == "release" {
+        cargo.arg("--release");
+    }
+    let status = cargo.status().expect("failed to run cargo for brighttray-hook");
+    assert!(status.success(), "building brighttray-hook failed");
+
+    let built = target_dir
+        .join(&target)
+        .join(&profile)
+        .join("brighttray_hook.dll");
+    std::fs::copy(&built, out_dir.join("brighttray_hook.dll"))
+        .unwrap_or_else(|e| panic!("copy {}: {e}", built.display()));
 }
