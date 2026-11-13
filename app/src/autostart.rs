@@ -1,6 +1,8 @@
 //! "Start with Windows" through `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 
 use windows::core::{w, PCWSTR};
+
+use crate::i18n::tr;
 use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::System::Registry::{
     RegCloseKey, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW, HKEY,
@@ -69,9 +71,15 @@ pub fn is_enabled() -> bool {
 }
 
 pub fn set_enabled(enabled: bool) -> Result<(), String> {
-    let key = open(true).ok_or("无法打开注册表启动项")?;
+    let key = open(true).ok_or(tr(
+        "无法打开注册表启动项",
+        "Couldn't open the startup registry key",
+    ))?;
     let status = if enabled {
-        let command = command().ok_or("无法获取程序路径")?;
+        let command = command().ok_or(tr(
+            "无法获取程序路径",
+            "Couldn't determine the program path",
+        ))?;
         let data: Vec<u16> = command.encode_utf16().chain(std::iter::once(0)).collect();
         let bytes =
             unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 2) };
@@ -87,7 +95,14 @@ pub fn set_enabled(enabled: bool) -> Result<(), String> {
     if status == ERROR_SUCCESS {
         Ok(())
     } else {
-        Err(format!("写入注册表失败（错误 {}）", status.0))
+        Err(format!(
+            "{} {}",
+            tr(
+                "写入注册表失败，错误",
+                "Couldn't write to the registry, error"
+            ),
+            status.0
+        ))
     }
 }
 

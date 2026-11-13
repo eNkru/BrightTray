@@ -5,6 +5,7 @@
 
 mod autostart;
 mod config;
+mod i18n;
 mod instance;
 
 use brighttray::ddc;
@@ -23,6 +24,7 @@ use tray_icon::{
 use wry::{WebView, WebViewBuilder};
 
 use config::Config;
+use i18n::tr;
 
 const ICON_RESOURCE: u16 = 1;
 /// Logical window width; the height follows the page content (see the `size` IPC message).
@@ -186,13 +188,25 @@ impl App {
     fn apply(&mut self, key: &str) {
         self.error = None;
         let Some(monitor) = self.monitors.iter().find(|m| m.key == key).cloned() else {
-            self.error = Some("这台显示器已断开，请刷新后重试。".into());
+            self.error = Some(
+                tr(
+                    "这台显示器已断开，请刷新后重试。",
+                    "This display is no longer connected. Refresh and try again.",
+                )
+                .into(),
+            );
             self.push_state();
             return;
         };
         // An unsupported monitor is never touched: no server, no hook, no saved choice.
         if !monitor.ddc() {
-            self.error = Some("这台显示器不支持 DDC/CI，未做任何修改。".into());
+            self.error = Some(
+                tr(
+                    "这台显示器不支持 DDC/CI，未做任何修改。",
+                    "This display doesn't support DDC/CI. Nothing was changed.",
+                )
+                .into(),
+            );
             self.push_state();
             return;
         }
@@ -207,10 +221,16 @@ impl App {
                 Ok(server) => self.server = Some(server),
                 Err(e) => {
                     self.error = Some(if e.kind() == std::io::ErrorKind::AddrInUse {
-                        "另一个 BrightTray（例如 brighttray-helper serve）正在运行，请先关闭它。"
-                            .into()
+                        tr(
+                            "另一个 BrightTray（例如 brighttray-helper serve）正在运行，请先关闭它。",
+                            "Another BrightTray (for example brighttray-helper serve) is already running. Close it first.",
+                        )
+                        .into()
                     } else {
-                        format!("无法启动服务：{e}")
+                        format!(
+                            "{}{e}",
+                            tr("无法启动服务：", "Couldn't start the service: ")
+                        )
                     });
                     self.push_state();
                     return;
@@ -356,7 +376,10 @@ fn main() {
 
     let ipc_proxy = proxy.clone();
     let webview = WebViewBuilder::new()
-        .with_html(UI.replace("{{ICON}}", ICON_SVG))
+        .with_html(
+            UI.replace("{{ICON}}", ICON_SVG)
+                .replace("{{LANG}}", i18n::lang().code()),
+        )
         .with_transparent(true)
         .with_devtools(cfg!(debug_assertions))
         .with_ipc_handler(move |request| {
@@ -366,8 +389,8 @@ fn main() {
         .expect("failed to create the WebView2 control");
 
     let menu = Menu::new();
-    let show_item = MenuItem::new("打开 BrightTray", true, None);
-    let quit_item = MenuItem::new("退出", true, None);
+    let show_item = MenuItem::new(tr("打开 BrightTray", "Open BrightTray"), true, None);
+    let quit_item = MenuItem::new(tr("退出", "Quit"), true, None);
     let _ = menu.append_items(&[&show_item, &PredefinedMenuItem::separator(), &quit_item]);
     let mut tray_builder = TrayIconBuilder::new()
         .with_tooltip("BrightTray")
@@ -473,8 +496,13 @@ fn main() {
                             None => {
                                 app.resume_pending = false;
                                 if app.config.monitor_key.is_some() {
-                                    app.error =
-                                        Some("上次应用的显示器当前不可用，请重新选择。".into());
+                                    app.error = Some(
+                                        tr(
+                                            "上次应用的显示器当前不可用，请重新选择。",
+                                            "The display you applied last time isn't available. Pick one again.",
+                                        )
+                                        .into(),
+                                    );
                                 }
                                 app.show();
                             }

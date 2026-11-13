@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="{{LANG}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -201,18 +201,18 @@
 <body>
   <div class="titlebar">
     <div class="brand" id="drag">{{ICON}}<span>BrightTray</span></div>
-    <button class="win-btn" id="btn-min" title="最小化">
+    <button class="win-btn" id="btn-min" data-title="minimize">
       <svg viewBox="0 0 10 10"><path d="M0 5.5h10"/></svg>
     </button>
-    <button class="win-btn close" id="btn-close" title="关闭">
+    <button class="win-btn close" id="btn-close" data-title="close">
       <svg viewBox="0 0 10 10"><path d="M.5.5l9 9M9.5.5l-9 9"/></svg>
     </button>
   </div>
 
   <div id="app">
     <div class="head">
-      <h2>显示器</h2>
-      <button class="icon-btn" id="btn-refresh" title="刷新">
+      <h2 data-t="displays"></h2>
+      <button class="icon-btn" id="btn-refresh" data-title="refresh">
         <svg viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3"/></svg>
       </button>
     </div>
@@ -228,15 +228,38 @@
     <div class="footer">
       <label class="opt">
         <input type="checkbox" class="toggle" id="opt-autostart">
-        <span>开机自启动</span>
+        <span data-t="autostart"></span>
       </label>
-      <button class="primary" id="btn-apply" disabled>应用</button>
+      <button class="primary" id="btn-apply" disabled></button>
     </div>
   </div>
 
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
+
+  const STRINGS = {
+    zh: {
+      displays: "显示器", autostart: "开机自启动", apply: "应用", applied: "已应用",
+      refresh: "刷新", minimize: "最小化", close: "关闭",
+      primary: "主", active: "控制中", noDdc: "不支持 DDC/CI", empty: "没有检测到显示器",
+      noDdcNotice: "该显示器未响应 DDC/CI，不会做任何修改。可在显示器菜单中开启 DDC/CI 后刷新。",
+      idle: "未启用", running: "运行中", waiting: "等待 ShellHost…", hooking: "正在挂接快速设置…",
+      restarting: "正在重启 ShellHost…", missing: "找不到 brighttray_hook.dll", starting: "启动中…",
+    },
+    en: {
+      displays: "Displays", autostart: "Start with Windows", apply: "Apply", applied: "Applied",
+      refresh: "Refresh", minimize: "Minimize", close: "Close",
+      primary: "Main", active: "Active", noDdc: "No DDC/CI", empty: "No displays found",
+      noDdcNotice: "This display doesn't respond to DDC/CI, so nothing will be changed. Turn on DDC/CI in the monitor's menu, then refresh.",
+      idle: "Not active", running: "Running", waiting: "Waiting for ShellHost…", hooking: "Hooking Quick Settings…",
+      restarting: "Restarting ShellHost…", missing: "brighttray_hook.dll not found", starting: "Starting…",
+    },
+  };
+  const T = STRINGS[document.documentElement.lang] || STRINGS.en;
+  document.querySelectorAll("[data-t]").forEach((el) => { el.textContent = T[el.dataset.t]; });
+  document.querySelectorAll("[data-title]").forEach((el) => { el.title = T[el.dataset.title]; });
+  $("btn-apply").textContent = T.apply;
   const send = (msg) => window.ipc.postMessage(msg);
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -252,15 +275,15 @@
   let lastHeight = 0;
 
   function statusOf(s) {
-    if (!s.applied) return { cls: "", text: "未启用" };
+    if (!s.applied) return { cls: "", text: T.idle };
     switch (s.hook.kind) {
-      case "hooked": return { cls: "on", text: "运行中" };
-      case "waiting": return { cls: "pending", text: "等待 ShellHost…" };
-      case "starting": return { cls: "pending", text: "正在挂接快速设置…" };
-      case "restarting": return { cls: "pending", text: "正在重启 ShellHost…" };
-      case "missing": return { cls: "err", text: "找不到 brighttray_hook.dll" };
+      case "hooked": return { cls: "on", text: T.running };
+      case "waiting": return { cls: "pending", text: T.waiting };
+      case "starting": return { cls: "pending", text: T.hooking };
+      case "restarting": return { cls: "pending", text: T.restarting };
+      case "missing": return { cls: "err", text: T.missing };
       case "error": return { cls: "err", text: s.hook.message };
-      default: return { cls: "pending", text: "启动中…" };
+      default: return { cls: "pending", text: T.starting };
     }
   }
 
@@ -290,18 +313,18 @@
     if (state.scanning && state.monitors.length === 0) {
       list.innerHTML = '<div class="skeleton"></div>';
     } else if (state.monitors.length === 0) {
-      list.innerHTML = '<div class="empty">没有检测到显示器</div>';
+      list.innerHTML = `<div class="empty">${T.empty}</div>`;
     } else {
       list.innerHTML = state.monitors.map((m) => {
         const cls = ["card", m.key === selected ? "selected" : "", m.ddc ? "" : "unsupported"].join(" ");
-        const live = m.key === state.applied ? ' · <span class="live">控制中</span>' : "";
+        const live = m.key === state.applied ? ` · <span class="live">${T.active}</span>` : "";
         const right = m.ddc
           ? `<div class="level"><div class="pct">${m.percent}%</div><div class="bar"><i style="width:${m.percent}%"></i></div></div>`
-          : '<span class="nosupport">不支持 DDC/CI</span>';
+          : `<span class="nosupport">${T.noDdc}</span>`;
         return `<button class="${cls}" data-key="${esc(m.key)}">
             <div class="glyph">${MONITOR}</div>
             <div class="info">
-              <div class="name"><span class="t">${esc(m.name)}</span>${m.primary ? '<span class="tag">主</span>' : ""}</div>
+              <div class="name"><span class="t">${esc(m.name)}</span>${m.primary ? `<span class="tag">${T.primary}</span>` : ""}</div>
               <div class="meta">${m.width} × ${m.height} · ${esc(m.device)}${live}</div>
             </div>
             ${right}
@@ -315,7 +338,7 @@
 
     let notice = null;
     if (state.error) notice = { kind: "err", text: state.error };
-    else if (mon && !mon.ddc) notice = { kind: "warn", text: "该显示器未响应 DDC/CI，不会做任何修改。可在显示器菜单中开启 DDC/CI 后刷新。" };
+    else if (mon && !mon.ddc) notice = { kind: "warn", text: T.noDdcNotice };
     const n = $("notice");
     n.className = "notice" + (notice ? " show k-" + notice.kind : "");
     if (notice) {
@@ -328,7 +351,7 @@
     const apply = $("btn-apply");
     apply.disabled = !mon || !mon.ddc || isApplied;
     apply.classList.toggle("done", isApplied);
-    apply.innerHTML = isApplied ? CHECK + "已应用" : "应用";
+    apply.innerHTML = isApplied ? CHECK + T.applied : T.apply;
 
     const st = statusOf(state);
     $("status").className = "status " + st.cls;

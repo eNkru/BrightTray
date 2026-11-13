@@ -101,7 +101,7 @@ brighttray_hook.dll     # 注入 ShellHost.exe 的 hook
 - **开机自启动**：写入当前用户的 `Run` 启动项。登录后直接在托盘中运行，并自动控制上次应用的显示器。
 - **托盘常驻**：关闭窗口只会收起到托盘，服务继续工作。单击托盘图标重新打开，在托盘菜单中选择"退出"才会真正退出。
 
-设置保存在 `%APPDATA%\BrightTray\config.ini`。程序只允许运行一个实例，再次启动会把已有窗口调到前台。
+设置保存在 `%APPDATA%\BrightTray\config.ini`。程序只允许运行一个实例，再次启动会把已有窗口调到前台。界面语言跟随 Windows 显示语言（中文 / 英文），也可以用环境变量 `BRIGHTTRAY_LANG=en` 或 `zh` 指定。
 
 > [!NOTE]
 > 桌面应用依赖 WebView2 运行时，Windows 11 已自带。
