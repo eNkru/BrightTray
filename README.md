@@ -69,7 +69,7 @@ A hook inside `ShellHost.exe` makes the hidden brightness tile applicable and fo
 | `list` | List monitors and their DDC/CI brightness |
 | `set <index> <0-100>` | Set one monitor's brightness |
 | `serve` | Run the pipe server and inject the hook, re-injecting when ShellHost restarts |
-| `inject [--early] [dll]` | Inject the hook manually |
+| `inject [--early --force-restart] [dll]` | Inject the hook manually |
 | `probe` | Read-only compatibility check |
 | `watch` | Print Windows brightness slider changes |
 
@@ -102,6 +102,8 @@ One command per line, local connections only.
 <br>
 
 Run `brighttray-helper list` to confirm the monitor reports a brightness; if it doesn't, enable DDC/CI in the monitor's OSD. Then check `%TEMP%\brighttray-hook.log` for `IQuickAction hook installed`.
+
+BrightTray never restarts Windows' shell on its own. If the slider still does not show up, the shell may have cached "no brightness" before the hook was in place — pick **Restart ShellHost** in the tray menu to give it a fresh start. From the command line, `brighttray-helper inject --early --force-restart` does the same thing.
 
 </details>
 

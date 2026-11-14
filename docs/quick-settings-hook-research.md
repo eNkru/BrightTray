@@ -106,6 +106,9 @@
 | **21** | `GetValue(HSTRING, IInspectable**)` | `Value` / `MinValue` / `MaxValue` / `QuickActionStatus` / `QuickActionIsActive` |
 | **22** | `SetValue(HSTRING, IInspectable*)` | `Value` 发给 helper `setall <p>`，其他转调 |
 
+> 上表的「恒 TRUE」是 P0-03 之前的行为。P0-03 之后 9/10/14 只在**已经测到亮度值**时返回 TRUE，
+> 未测到就转调原函数（见 `spec/brighttray-hook/backend/hooking-contract.md`）。
+
 实现里通过 `QuickActionsDataModel.dll` 的导出 `GetQuickActionsProvider` 拿到 provider，
 再调用 `IQuickActionsProvider::GetQuickActionByFriendlyName`（provider vtable slot 13）取得
 亮度 `QuickSetting` 实例；校验 `get_Id` 后 patch 共享 vtable。这样不依赖 `QuickSetting`
@@ -129,14 +132,15 @@ vtable 的 RVA。`get_Id` 是 `WindowsDuplicateString` 的包装，返回的 HST
 cargo build --release
 target\release\brighttray-helper.exe serve      # 管道服务器 + 监视 ShellHost 并自动注入
 target\release\brighttray-helper.exe inject     # 手动注入当前 ShellHost
-target\release\brighttray-helper.exe inject --early [dll]
+target\release\brighttray-helper.exe inject --early --force-restart [dll]
 target\release\brighttray-helper.exe probe      # 只读验证，不会 patch
 ```
 
 - `serve` 默认会在 ShellHost 重启后自动补注入；`BRIGHTTRAY_NO_HOOK=1` 可关闭。
 - 管道协议新增 `getall` / `setall <p>`，并把服务器改为**多实例、每客户端一个线程**，
   托盘程序和 hook DLL 可以同时连接。
-- `inject --early` 会以 suspended 方式启动 ShellHost、注入并等待 hook 的 ready 事件后再 resume；
+- `inject --early --force-restart` 会以 suspended 方式启动 ShellHost、注入并等待 hook 的 ready 事件后再 resume；
+  `--early` 会先结束所有正在运行的 ShellHost，所以必须同时给出 `--force-restart`，否则 CLI 只打印说明并以 2 退出；
   在本机实测中最终工作路径是**普通注入 + QuickSetting vtable patch**，不依赖 early 注入。
 - hook DLL 会 pin 自身（`GetModuleHandleExW(...PIN...)`），避免 vtable 还引用着代码时被卸载。
 - 目前只把 hook 注入 `ShellHost.exe`；`SettingsHandlers_PCDisplay.dll` 的 `ISettingItem` patch 保留，

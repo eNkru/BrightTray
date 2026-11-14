@@ -48,6 +48,8 @@ enum UserEvent {
     Show,
     Menu(MenuEvent),
     Tray(TrayIconEvent),
+    /// The result of the explicit ShellHost restart the user asked for.
+    RestartShellHost(Result<(), String>),
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +98,7 @@ struct App {
     /// The window is shown only once the page has laid out and sized it, so it never jumps.
     reveal_pending: bool,
     show_id: MenuId,
+    restart_id: MenuId,
     quit_id: MenuId,
 }
 
@@ -122,7 +125,6 @@ impl App {
             Hook::Starting => json!({ "kind": "starting" }),
             Hook::Event(WatchEvent::Hooked) => json!({ "kind": "hooked" }),
             Hook::Event(WatchEvent::NoShellHost) => json!({ "kind": "waiting" }),
-            Hook::Event(WatchEvent::Restarting) => json!({ "kind": "restarting" }),
             Hook::Event(WatchEvent::DllMissing(_)) => json!({ "kind": "missing" }),
             Hook::Event(WatchEvent::Error(message)) => {
                 json!({ "kind": "error", "message": message })
@@ -238,14 +240,16 @@ impl App {
         }
 
         if !self.watcher_started {
-            self.watcher_started = true;
             self.hook = Hook::Starting;
             match hookdll::extract() {
                 Ok(dll) => {
+                    // Only now is there a watcher that can inject into a new ShellHost.
+                    self.watcher_started = true;
                     let proxy = self.proxy.clone();
-                    // Restart a ShellHost that has been up for a while: its Quick Settings
-                    // panel may already have cached "no brightness".
-                    inject::watch_and_inject(dll, true, move |event| {
+                    // The watcher only injects; it never ends a ShellHost process. A shell
+                    // that already cached "no brightness" is handled by the tray menu's
+                    // explicit restart.
+                    inject::watch_and_inject(dll, move |event| {
                         let _ = proxy.send_event(UserEvent::Watch(event.clone()));
                     });
                 }
@@ -271,6 +275,39 @@ impl App {
     /// is the way out.
     fn hide(&self) {
         self.window.set_visible(false);
+    }
+
+    /// Ends every running ShellHost so that Windows starts a fresh one, which asks Quick
+    /// Settings about the brightness again. The user asked for this by picking the tray menu
+    /// item, so it is the one place the app is allowed to end a shell process.
+    ///
+    /// The watcher injects into the new ShellHost on its own; this only has to start it.
+    fn restart_shellhost(&mut self) {
+        if !self.watcher_started {
+            self.error = Some(
+                tr(
+                    "请先应用一个显示器，再重启 ShellHost。",
+                    "Apply a display first, then restart ShellHost.",
+                )
+                .into(),
+            );
+            self.show_notice();
+            self.push_state();
+            return;
+        }
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let result = inject::restart_shellhost();
+            let _ = proxy.send_event(UserEvent::RestartShellHost(result));
+        });
+    }
+
+    /// Brings the window forward. The app usually lives in the tray, so a notice that only
+    /// lives in the page would never be seen.
+    fn show_notice(&self) {
+        self.window.set_visible(true);
+        self.window.set_minimized(false);
+        self.window.set_focus();
     }
 
     fn reveal(&mut self) {
@@ -389,8 +426,22 @@ fn main() {
 
     let menu = Menu::new();
     let show_item = MenuItem::new(tr("打开 BrightTray", "Open BrightTray"), true, None);
+    let restart_item = MenuItem::new(
+        tr(
+            "重启 ShellHost（开始菜单会短暂消失）",
+            "Restart ShellHost (the Start menu disappears briefly)",
+        ),
+        true,
+        None,
+    );
     let quit_item = MenuItem::new(tr("退出", "Quit"), true, None);
-    let _ = menu.append_items(&[&show_item, &PredefinedMenuItem::separator(), &quit_item]);
+    let _ = menu.append_items(&[
+        &show_item,
+        &PredefinedMenuItem::separator(),
+        &restart_item,
+        &PredefinedMenuItem::separator(),
+        &quit_item,
+    ]);
     let mut tray_builder = TrayIconBuilder::new()
         .with_tooltip("BrightTray")
         .with_menu(Box::new(menu))
@@ -430,6 +481,7 @@ fn main() {
         last_scan: None,
         reveal_pending: !started_by_logon,
         show_id: show_item.id().clone(),
+        restart_id: restart_item.id().clone(),
         quit_id: quit_item.id().clone(),
     };
     // Scan right away instead of waiting for the page: a logon start never shows the window.
@@ -515,7 +567,22 @@ fn main() {
                         *control_flow = ControlFlow::Exit;
                     } else if event.id == app.show_id {
                         app.show();
+                    } else if event.id == app.restart_id {
+                        app.restart_shellhost();
                     }
+                }
+                UserEvent::RestartShellHost(result) => {
+                    // On success the hook state is left alone on purpose: the watcher
+                    // reports the new ShellHost on its own, and setting it here would race
+                    // with that report.
+                    if let Err(e) = result {
+                        app.error = Some(format!(
+                            "{}{e}",
+                            tr("无法重启 ShellHost：", "Couldn't restart ShellHost: ")
+                        ));
+                        app.show_notice();
+                    }
+                    app.push_state();
                 }
                 UserEvent::Tray(TrayIconEvent::Click {
                     button: MouseButton::Left,
