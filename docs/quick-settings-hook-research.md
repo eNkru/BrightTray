@@ -106,6 +106,9 @@
 | **21** | `GetValue(HSTRING, IInspectable**)` | `Value` / `MinValue` / `MaxValue` / `QuickActionStatus` / `QuickActionIsActive` |
 | **22** | `SetValue(HSTRING, IInspectable*)` | `Value` 发给 helper `setall <p>`，其他转调 |
 
+> 上表的「恒 TRUE」是 P0-03 之前的行为。P0-03 之后 9/10/14 只在**已经测到亮度值**时返回 TRUE，
+> 未测到就转调原函数（见 `spec/brighttray-hook/backend/hooking-contract.md`）。
+
 实现里通过 `QuickActionsDataModel.dll` 的导出 `GetQuickActionsProvider` 拿到 provider，
 再调用 `IQuickActionsProvider::GetQuickActionByFriendlyName`（provider vtable slot 13）取得
 亮度 `QuickSetting` 实例；校验 `get_Id` 后 patch 共享 vtable。这样不依赖 `QuickSetting`

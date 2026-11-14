@@ -68,8 +68,21 @@ anywhere in the crate.
 
 ## Acceptance criteria
 
-- [ ] `grep -n "PIPE_FALLBACK_PERCENT" hook/src/lib.rs` returns nothing.
-- [ ] No `100` default brightness remains in the crate.
+Checked here (statically):
+
+- [x] `grep -n "PIPE_FALLBACK_PERCENT" hook/src/lib.rs` returns nothing.
+- [x] No default brightness remains in the crate — the cache starts at
+      `PERCENT_UNKNOWN` and every override falls back to the original
+      implementation while the value is unknown.
+- [x] Every override site falls back: `get_IsApplicable`, `get_IsEnabled`,
+      `GetValue`, `get_QuickActionStatus`, `get_QuickActionIsActive`, for
+      both the `ISettingItem` and the `IQuickAction` hook.
+- [x] The hook package spec describes the known/unknown rule.
+
+For the Windows machine (this environment has no Rust toolchain and the
+`windows` crate has no non-Windows target, so none of these could be run
+here):
+
 - [ ] **Windows check:** start `BrightTray.exe` with the helper killed (or
       kill the helper before the app), open Quick Settings — the brightness
       tile does not appear, and no value of 100 % is reported anywhere.
@@ -84,7 +97,6 @@ anywhere in the crate.
       still moves the slider.
 - [ ] `cargo build --release`, `cargo clippy --workspace --all-targets` and
       `cargo fmt --check` are clean **on Windows**.
-- [ ] The hook package spec describes the known/unknown rule.
 
 ## Out of scope
 

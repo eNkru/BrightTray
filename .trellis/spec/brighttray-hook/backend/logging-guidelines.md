@@ -101,3 +101,6 @@ anywhere.
   ```rust
   log(format!("external brightness change {previous}% -> {percent}%"));
   ```
+
+  The very first measurement is not a change - there was no previous value -
+  so it is logged once as `brightness known: N%`.

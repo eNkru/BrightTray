@@ -27,9 +27,10 @@ pipe may be taken by another instance). So:
 
 ## Reads block, writes must not
 
-`get_all()` waits for the helper and reads a line — it blocks. It is only
-called from the background watcher thread (`start_watcher` in `lib.rs`), which
-sleeps 1.5 s between polls.
+`get_all()` waits for the helper and reads a line — it blocks. It is called
+from `install()` (once, on the install thread) and from the background watcher
+thread (`start_watcher` in `lib.rs`), which sleeps 1.5 s between polls. Never
+from a vtable hook.
 
 `set_all()` is called from `SetValue`, which the shell invokes on **its UI
 thread while the slider is being dragged**. It must never block, so it hands

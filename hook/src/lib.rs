@@ -6,12 +6,17 @@
 //!
 //! This DLL patches the shared `ISettingItem` vtable of the `DisplayBrightness` setting once:
 //!
-//! * `get_IsEnabled` / `get_IsApplicable` report TRUE.
+//! * `get_IsEnabled` / `get_IsApplicable` report TRUE - but only once a brightness has been
+//!   measured.
 //! * `GetValue("Value" / "MinValue" / "MaxValue" / "QuickActionStatus")` answer from a cached
 //!   DDC/CI brightness, read and written through the BrightTray helper pipe.
 //! * `SetValue("Value", Int32)` forwards the percentage to the helper.
 //! * `add_SettingChanged` / `remove_SettingChanged` remember the UI handlers, so changes made
 //!   from outside (the tray app) can refresh an open slider.
+//!
+//! Before the first measurement there is nothing to report, so every override falls back to
+//! the original implementation: the shell then behaves exactly like the un-hooked system
+//! instead of showing a brightness that was never read.
 //!
 //! ControlCenter does not bind directly to the SettingsHandlers object, though. Its Quick
 //! Settings list is made of `QuickSetting` objects from `QuickActionsDataModel.dll`, which cache
@@ -87,7 +92,9 @@ const QA_SLOT_SET_VALUE: usize = 22;
 
 const SETTING_ID: &str = "SystemSettings_Display_Brightness";
 const QUICK_ACTION_NAME: &str = "Microsoft.QuickAction.Brightness";
-const PIPE_FALLBACK_PERCENT: u32 = 100;
+/// The cached brightness has never been measured. A percent is 0..=100, so `u32::MAX` cannot
+/// collide with one.
+const PERCENT_UNKNOWN: u32 = u32::MAX;
 
 struct HandlerReg {
     sender: *mut c_void,
@@ -100,6 +107,8 @@ struct HandlerReg {
 unsafe impl Send for HandlerReg {}
 
 struct State {
+    original_is_enabled: GetBoolFn,
+    original_is_applicable: GetBoolFn,
     original_get_value: GetValueFn,
     original_set_value: SetValueFn,
     original_add_handler: AddHandlerFn,
@@ -122,9 +131,10 @@ struct QuickState {
 
 static STATE: OnceLock<State> = OnceLock::new();
 static QUICK_STATE: OnceLock<QuickState> = OnceLock::new();
-/// Last brightness in percent. GetValue must be cheap and non-blocking; the helper is queried
-/// asynchronously and the result is published here.
-static CACHED_PERCENT: AtomicU32 = AtomicU32::new(PIPE_FALLBACK_PERCENT);
+/// Last brightness in percent, or [`PERCENT_UNKNOWN`] when it has never been measured.
+/// GetValue must be cheap and non-blocking; the helper is queried asynchronously and the result
+/// is published here.
+static CACHED_PERCENT: AtomicU32 = AtomicU32::new(PERCENT_UNKNOWN);
 /// Monotonic time of the last UI-originated SetValue. The watcher ignores DDC reads for a short
 /// window afterwards so a slow monitor cannot pull the slider back to an in-flight old value.
 static LAST_SET_MS: AtomicU64 = AtomicU64::new(0);
@@ -134,6 +144,46 @@ static SEEN_PROPERTIES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 fn monotonic_ms() -> u64 {
     static EPOCH: OnceLock<Instant> = OnceLock::new();
     EPOCH.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
+/// The cached brightness, or `None` when it has never been measured.
+///
+/// The hook must never report a brightness it did not read. Until the helper answers, the
+/// shell is told exactly what the un-hooked system would tell it.
+fn cached_percent() -> Option<u32> {
+    match CACHED_PERCENT.load(Ordering::Relaxed) {
+        PERCENT_UNKNOWN => None,
+        percent => Some(percent),
+    }
+}
+
+/// Publishes a measured brightness and logs the transition.
+///
+/// The first measurement is a transition from "unknown" - there was no previous value - and
+/// every later one is a change. Returns whether the value changed.
+fn publish_percent(percent: u32) -> bool {
+    let previous = CACHED_PERCENT.swap(percent, Ordering::Relaxed);
+    if previous == percent {
+        return false;
+    }
+    match previous {
+        PERCENT_UNKNOWN => log(format!("brightness known: {percent}%")),
+        previous => log(format!(
+            "external brightness change {previous}% -> {percent}%"
+        )),
+    }
+    true
+}
+
+/// Stores a brightness the user asked for.
+///
+/// The value becomes known here, because it came from the user's own input. Only that first
+/// transition is logged: a later move is the user's, not an external change.
+fn store_user_percent(percent: u32) {
+    let previous = CACHED_PERCENT.swap(percent, Ordering::Relaxed);
+    if previous == PERCENT_UNKNOWN {
+        log(format!("brightness known: {percent}%"));
+    }
 }
 
 /// Appends a line to `%TEMP%\brighttray-hook.log`. Best effort only: logging must never be
@@ -281,17 +331,31 @@ unsafe fn read_percent(value: *mut c_void) -> Option<i32> {
     property.GetSingle().ok().map(|v| v.round() as i32)
 }
 
-unsafe extern "system" fn hooked_is_enabled(_this: *mut c_void, out: *mut u8) -> HRESULT {
+unsafe extern "system" fn hooked_is_enabled(this: *mut c_void, out: *mut u8) -> HRESULT {
     if out.is_null() {
         return E_POINTER;
+    }
+    // Without a measured brightness there is nothing to claim: let the system answer.
+    if cached_percent().is_none() {
+        let Some(state) = STATE.get() else {
+            return E_UNEXPECTED;
+        };
+        return (state.original_is_enabled)(this, out);
     }
     *out = 1;
     S_OK
 }
 
-unsafe extern "system" fn hooked_is_applicable(_this: *mut c_void, out: *mut u8) -> HRESULT {
+unsafe extern "system" fn hooked_is_applicable(this: *mut c_void, out: *mut u8) -> HRESULT {
     if out.is_null() {
         return E_POINTER;
+    }
+    // Without a measured brightness there is nothing to claim: let the system answer.
+    if cached_percent().is_none() {
+        let Some(state) = STATE.get() else {
+            return E_UNEXPECTED;
+        };
+        return (state.original_is_applicable)(this, out);
     }
     *out = 1;
     S_OK
@@ -311,14 +375,17 @@ unsafe fn get_value_impl(this: *mut c_void, name: *mut c_void, out: *mut *mut c_
         log_property("GetValue", name_text);
     }
 
+    // Without a measured brightness the hook has nothing to say: behave like the un-hooked
+    // system instead of inventing a value.
+    let Some(percent) = cached_percent() else {
+        return (state.original_get_value)(this, name, out);
+    };
+
     match name_text.as_deref() {
-        Some("Value") => box_i32(CACHED_PERCENT.load(Ordering::Relaxed) as i32, out),
+        Some("Value") => box_i32(percent as i32, out),
         Some("MinValue") => box_i32(0, out),
         Some("MaxValue") => box_i32(100, out),
-        Some("QuickActionStatus") => {
-            let percent = CACHED_PERCENT.load(Ordering::Relaxed);
-            box_string(&format!("{percent}%"), out)
-        }
+        Some("QuickActionStatus") => box_string(&format!("{percent}%"), out),
         // The tile is not a toggle, but the shell asks every quick action for this flag. A
         // desktop brightness setting that only exists because we injected it is "active".
         Some("QuickActionIsActive") => box_bool(true, out),
@@ -355,7 +422,7 @@ unsafe fn set_value_impl(this: *mut c_void, name: *mut c_void, value: *mut c_voi
     if name_text.as_deref() == Some("Value") {
         if let Some(percent) = read_percent(value) {
             let percent = percent.clamp(0, 100) as u32;
-            CACHED_PERCENT.store(percent, Ordering::Relaxed);
+            store_user_percent(percent);
             LAST_SET_MS.store(monotonic_ms(), Ordering::Relaxed);
             pipe::set_all(percent);
             return S_OK;
@@ -453,6 +520,10 @@ unsafe extern "system" fn quick_is_applicable(this: *mut c_void, out: *mut u8) -
     if out.is_null() {
         return E_POINTER;
     }
+    // Without a measured brightness there is nothing to claim: let the system answer.
+    if cached_percent().is_none() {
+        return (state.original_is_applicable)(this, out);
+    }
     *out = 1;
     S_OK
 }
@@ -468,6 +539,10 @@ unsafe extern "system" fn quick_is_enabled(this: *mut c_void, out: *mut u8) -> H
     if out.is_null() {
         return E_POINTER;
     }
+    // Without a measured brightness there is nothing to claim: let the system answer.
+    if cached_percent().is_none() {
+        return (state.original_is_enabled)(this, out);
+    }
     *out = 1;
     S_OK
 }
@@ -481,6 +556,10 @@ unsafe extern "system" fn quick_is_active(this: *mut c_void, out: *mut u8) -> HR
     }
     if out.is_null() {
         return E_POINTER;
+    }
+    // Without a measured brightness there is nothing to claim: let the system answer.
+    if cached_percent().is_none() {
+        return (state.original_is_active)(this, out);
     }
     *out = 1;
     S_OK
@@ -497,7 +576,10 @@ unsafe extern "system" fn quick_status(this: *mut c_void, out: *mut *mut c_void)
         return E_POINTER;
     }
     *out = std::ptr::null_mut();
-    let percent = CACHED_PERCENT.load(Ordering::Relaxed);
+    // Without a measured brightness there is nothing to claim: let the system answer.
+    let Some(percent) = cached_percent() else {
+        return (state.original_status)(this, out);
+    };
     box_string(&format!("{percent}%"), out)
 }
 
@@ -522,14 +604,17 @@ unsafe fn quick_get_value_impl(
         log_property("QuickGetValue", name_text);
     }
 
+    // Without a measured brightness the hook has nothing to say: behave like the un-hooked
+    // system instead of inventing a value.
+    let Some(percent) = cached_percent() else {
+        return (state.original_get_value)(this, name, out);
+    };
+
     match name_text.as_deref() {
-        Some("Value") => box_i32(CACHED_PERCENT.load(Ordering::Relaxed) as i32, out),
+        Some("Value") => box_i32(percent as i32, out),
         Some("MinValue") => box_i32(0, out),
         Some("MaxValue") => box_i32(100, out),
-        Some("QuickActionStatus") => {
-            let percent = CACHED_PERCENT.load(Ordering::Relaxed);
-            box_string(&format!("{percent}%"), out)
-        }
+        Some("QuickActionStatus") => box_string(&format!("{percent}%"), out),
         Some("QuickActionIsActive") => box_bool(true, out),
         _ => (state.original_get_value)(this, name, out),
     }
@@ -570,7 +655,7 @@ unsafe fn quick_set_value_impl(
     if name_text.as_deref() == Some("Value") {
         if let Some(percent) = read_percent(value) {
             let percent = percent.clamp(0, 100) as u32;
-            CACHED_PERCENT.store(percent, Ordering::Relaxed);
+            store_user_percent(percent);
             LAST_SET_MS.store(monotonic_ms(), Ordering::Relaxed);
             pipe::set_all(percent);
             return S_OK;
@@ -737,7 +822,10 @@ fn start_watcher() {
     }
     std::thread::spawn(|| loop {
         std::thread::sleep(std::time::Duration::from_millis(1500));
-        if !has_handlers() {
+        // Keep polling until a brightness has been measured: while the value is unknown the
+        // tile stays hidden, and a hidden tile registers no handler, so waiting for one
+        // would leave the value unknown for good.
+        if !has_handlers() && cached_percent().is_some() {
             continue;
         }
         // A SetValue was just sent to the monitor. DDC reads take tens of milliseconds and can
@@ -747,11 +835,7 @@ fn start_watcher() {
             continue;
         }
         if let Some(percent) = pipe::get_all() {
-            let previous = CACHED_PERCENT.swap(percent, Ordering::Relaxed);
-            if previous != percent {
-                log(format!(
-                    "external brightness change {previous}% -> {percent}%"
-                ));
+            if publish_percent(percent) {
                 notify_handlers();
             }
         }
@@ -1061,6 +1145,12 @@ unsafe fn try_install() -> Result<(), String> {
 
     if STATE.get().is_none() {
         let state = State {
+            original_is_enabled: std::mem::transmute::<usize, GetBoolFn>(
+                *vtable.add(SLOT_IS_ENABLED),
+            ),
+            original_is_applicable: std::mem::transmute::<usize, GetBoolFn>(
+                *vtable.add(SLOT_IS_APPLICABLE),
+            ),
             original_get_value: std::mem::transmute::<usize, GetValueFn>(
                 *vtable.add(SLOT_GET_VALUE),
             ),
@@ -1106,8 +1196,10 @@ fn install() {
         }
         // Must happen before any vtable points into this module.
         pin_self();
+        // The first measurement makes the brightness known. Until it happens the hook falls
+        // back to the original implementation.
         if let Some(percent) = pipe::get_all() {
-            CACHED_PERCENT.store(percent, Ordering::Relaxed);
+            publish_percent(percent);
         }
 
         let mut settings_done = false;

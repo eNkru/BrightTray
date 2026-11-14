@@ -145,7 +145,10 @@ acknowledgement.
   40 % to the targeted monitor, the slider shows 40 %.
 - **Base** — the helper is not running: the hook's `get_all()` returns `None`,
   the watcher keeps the last cached percent, and the shell shows the last
-  value it had. Nothing crashes, nothing is logged per poll.
+  value it had. Before the first successful read the hook has no value at all
+  and tells the shell nothing — it falls back to the system's own brightness
+  behaviour instead of inventing one. Nothing crashes, nothing is logged per
+  poll.
 - **Bad** — the user sends `set 0 200`: the percent is written to the monitor
   as 100 % (`percent.min(100)` in `set_brightness_percent`), and the reply is
   still absent.

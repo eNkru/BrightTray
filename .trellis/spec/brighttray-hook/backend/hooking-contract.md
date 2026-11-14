@@ -25,6 +25,10 @@ Bluetooth, night light …). The `ISettingItem` vtable is shared by every
 setting item. So every hook must first check that the instance it was called
 on is the brightness one.
 
+The `ISettingItem` hook keeps the original `get_IsEnabled` and
+`get_IsApplicable` pointers as well, so it can hand the call back when it has
+no measured value.
+
 ## Identify the instance on every call
 
 ```rust
@@ -153,18 +157,46 @@ injector waits for that event before it resumes ShellHost.
 | `QuickActionIsActive` | `true` |
 | anything else | the original implementation |
 
-**The initial value is a placeholder, not a reading.** `CACHED_PERCENT` starts
-at `PIPE_FALLBACK_PERCENT = 100`:
+**A value is reported only when it was measured.** The cache starts out
+*unknown*, not at some default:
 
 ```rust
-const PIPE_FALLBACK_PERCENT: u32 = 100;
-static CACHED_PERCENT: AtomicU32 = AtomicU32::new(PIPE_FALLBACK_PERCENT);
+/// The cached brightness has never been measured. A percent is 0..=100, so `u32::MAX` cannot
+/// collide with one.
+const PERCENT_UNKNOWN: u32 = u32::MAX;
+static CACHED_PERCENT: AtomicU32 = AtomicU32::new(PERCENT_UNKNOWN);
+
+fn cached_percent() -> Option<u32> {
+    match CACHED_PERCENT.load(Ordering::Relaxed) {
+        PERCENT_UNKNOWN => None,
+        percent => Some(percent),
+    }
+}
 ```
 
-So when the helper is not running, the shell is told the brightness is 100 % —
-a value that was never measured. `install()` overwrites it with the real
-value when `pipe::get_all()` succeeds, but until then the Quick Settings
-slider shows a full-brightness reading that does not match the monitor.
+While the value is unknown, **every** override falls back to the original
+implementation — `get_IsApplicable`, `get_IsEnabled`, `GetValue`,
+`get_QuickActionStatus` and `get_QuickActionIsActive`. The hook then behaves
+exactly like the un-hooked system: on a desktop the original `IsApplicable` is
+FALSE, so the brightness tile is simply not shown. A missing tile is honest;
+an invented "100 %" is not.
+
+The value becomes known when:
+
+- `install()` reads it from the helper for the first time;
+- the watcher reads it from the helper;
+- the user moves the slider — `SetValue` stores what the user asked for.
+
+The first measurement is logged as `brightness known: N%`; every later change
+as `external brightness change X% -> Y%`.
+
+Once a value has been measured, it stays: the last known reading is shown
+while the helper is unreachable.
+
+The watcher keeps polling the helper until a value has been measured, even
+while no UI handler is registered: an unknown value keeps the tile hidden, and
+a hidden tile registers no handler — waiting for one would leave the value
+unknown for good.
 
 `SetValue("Value", Int32)` clamps to 0..100, stores it in `CACHED_PERCENT`,
 records the time in `LAST_SET_MS` and forwards it to the helper.
