@@ -1,2 +1,8 @@
 target/
 target-dev/
+
+# AI assistant tooling & Trellis workflow files — kept locally, not committed
+.trellis/
+.agents/
+.pi/
+AGENTS.md
