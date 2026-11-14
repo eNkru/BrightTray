@@ -77,3 +77,45 @@ The hook watcher no longer ends ShellHost.exe; the restart is an explicit tray a
 
 - Run the Windows verification list in .trellis/tasks/11-13-p0-01-no-shellhost-kill/prd.md
 - Then start 11-13-p0-03-no-fake-100-percent
+
+
+## Session 3: P0-03: remove the fake 100 percent brightness fallback
+<!-- trellis-session: v=2 fp=a45e7957f54cb38e -->
+
+**Date**: 2026-11-14
+**Task**: P0-03: remove the fake 100 percent brightness fallback
+**Package**: brighttray-hook
+**Branch**: `fix/p0-03-no-fake-100-percent`
+
+### Summary
+
+The hook no longer reports a brightness it did not measure: the cache is known or unknown, and every override hands the call back to the system until a value exists
+
+### Main Changes
+
+- Replaced PIPE_FALLBACK_PERCENT = 100 with PERCENT_UNKNOWN (u32::MAX) and added cached_percent() -> Option<u32>
+- Every override falls back to the original implementation while the value is unknown: get_IsEnabled, get_IsApplicable, GetValue, get_QuickActionStatus, get_QuickActionIsActive - for both the ISettingItem and the IQuickAction hook
+- Added original_is_enabled / original_is_applicable to State, taken from vtable slots 9 and 10 before patching
+- publish_percent() logs the first measurement once as 'brightness known: N%' and later changes as 'external brightness change X% -> Y%'; store_user_percent() covers the SetValue path
+- The watcher keeps polling the helper until a value has been measured, even with no UI handler registered - an unknown value keeps the tile hidden and a hidden tile registers no handler
+- Updated hooking-contract, logging-guidelines, pipe-client and the helper pipe-protocol specs, plus a note in docs/quick-settings-hook-research.md
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `efa9093` | P0-03: never report a brightness that was not measured |
+
+### Testing
+
+- [OK] [OK] Static review pass (trellis-check): every R1-R5 item mapped to a line, const-pattern matching, transmute shapes and clippy-prone constructs reasoned through; no defect left before commit
+- [OK] [--] cargo build/clippy/fmt and the five live checks in prd.md are still open - no Rust toolchain here and the windows crate has no non-Windows target
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Run the Windows verification list in .trellis/tasks/11-13-p0-03-no-fake-100-percent/prd.md
+- Then start 11-13-p0-04-ddc-write-amplification (P0-02 needs the pipe protocol rework, so it goes last)
