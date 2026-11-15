@@ -1,0 +1,146 @@
+# CI: check every build, and ship the Windows binaries.
+#
+# The whole workspace is Windows-only (`std::os::windows`, the `windows` crate),
+# so every job runs on a Windows runner.
+#
+# Two things come out of this workflow:
+#   * `check`  — the gate: formatting, lints and tests for the whole workspace.
+#                This is what would have caught the helper crate not compiling.
+#   * `build`  — the release binaries: BrightTray.exe (the hook DLL is embedded
+#                in it), brighttray-helper.exe and their checksums. They are
+#                attached to the run as an artifact, and to a GitHub Release
+#                when the run was triggered by a v* tag.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+# A newer push to the same branch makes the previous run obsolete.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# Least privilege by default: only the release step needs to write, and it
+# asks for it explicitly.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Formatting, lints and tests
+    runs-on: windows-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Toolchain
+        # The runner image ships a stable toolchain; ask for the two
+        # components the gate needs, and print what we are running with.
+        run: |
+          rustc -Vv
+          cargo -V
+          rustup component add rustfmt clippy
+          cargo fmt --version
+          cargo clippy --version
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lints
+        # --workspace on purpose: the app package consumes the helper library
+        # and embeds the hook DLL, so it is where a drift between the crates
+        # shows up.
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        # No tests yet (the audit's P1-01 adds the first ones); the step is
+        # here so they are run from the day they exist.
+        run: cargo test --workspace --all-targets
+
+  build:
+    name: Windows binaries
+    needs: check
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Toolchain
+        run: |
+          rustc -Vv
+          cargo -V
+
+      - name: The tag must match the version that is shipped
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $version = (Select-String -Path app/Cargo.toml -Pattern '^version = "(.+)"$').Matches[0].Groups[1].Value
+          if ("v$version" -ne $tag) {
+            Write-Error "the tag $tag does not match the version $version in app/Cargo.toml - bump the version before tagging"
+            exit 1
+          }
+          Write-Host "tag $tag matches app/Cargo.toml version $version"
+
+      - name: Prepare the path remapping
+        shell: pwsh
+        # Do not leak the build machine's paths into the binaries (audit P1-04).
+        # RUSTFLAGS is inherited by the nested cargo build in app/build.rs, so
+        # the hook DLL is remapped as well.
+        run: |
+          $cargoHome = Join-Path $env:USERPROFILE '.cargo'
+          $flags = "--remap-path-prefix=$env:GITHUB_WORKSPACE=. --remap-path-prefix=$cargoHome=cargo"
+          Write-Host "RUSTFLAGS=$flags"
+          "RUSTFLAGS=$flags" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build
+        run: cargo build --release --workspace
+
+      - name: Collect the binaries
+        id: collect
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target\release\BrightTray.exe dist\
+          Copy-Item target\release\brighttray-helper.exe dist\
+          # sha256sum format: the hash, two spaces, the file name.
+          $sums = Get-ChildItem dist\*.exe | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 -Path $_.FullName).Hash.ToLower(), $_.Name
+          }
+          $sums | Out-File -FilePath dist\SHA256SUMS.txt -Encoding ascii
+          Get-Content dist\SHA256SUMS.txt
+          $version = (Select-String -Path app/Cargo.toml -Pattern '^version = "(.+)"$').Matches[0].Groups[1].Value
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload the binaries to the run
+        uses: actions/upload-artifact@v7
+        with:
+          name: BrightTray-${{ steps.collect.outputs.version }}-windows
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Re-running a failed workflow for the same tag must not fail: update
+          # the assets of the existing release instead.
+          gh release view $env:TAG --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:TAG dist\BrightTray.exe dist\brighttray-helper.exe dist\SHA256SUMS.txt --repo $env:GITHUB_REPOSITORY --clobber
+          } else {
+            gh release create $env:TAG dist\BrightTray.exe dist\brighttray-helper.exe dist\SHA256SUMS.txt --repo $env:GITHUB_REPOSITORY --title "BrightTray $env:TAG" --generate-notes
+          }
