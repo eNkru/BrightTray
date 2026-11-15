@@ -22,8 +22,8 @@ fn build_hook() {
     println!("cargo:rerun-if-changed=../Cargo.lock");
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
-    let workspace = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"))
-        .join("..");
+    let workspace =
+        PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR")).join("..");
     let target = env::var("TARGET").expect("TARGET");
     let profile = env::var("PROFILE").expect("PROFILE");
     let target_dir = out_dir.join("hook-target");
@@ -37,7 +37,9 @@ fn build_hook() {
     if profile == "release" {
         cargo.arg("--release");
     }
-    let status = cargo.status().expect("failed to run cargo for brighttray-hook");
+    let status = cargo
+        .status()
+        .expect("failed to run cargo for brighttray-hook");
     assert!(status.success(), "building brighttray-hook failed");
 
     let built = target_dir
