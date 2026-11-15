@@ -124,29 +124,65 @@ impl Monitor {
         false
     }
 
+    /// The raw VCP value for `percent` on this monitor, or `None` when the range is not known
+    /// yet and the monitor does not answer.
+    ///
+    /// Verification compares raw values, not percentages, so the caller needs the same scaling
+    /// the write used.
+    pub fn scale_percent(&self, percent: u32) -> Option<u32> {
+        let max = match self.max.get() {
+            Some(max) => max,
+            None => self.brightness()?.max,
+        };
+        Some((percent.min(100) * max + 50) / 100)
+    }
+
+    /// Sends one brightness write without reading it back. True when the command went out.
+    ///
+    /// A slider drag calls this once per throttle window; the read-back that confirms the write
+    /// belongs to the end of the drag, not to every step, because every write is an EEPROM write
+    /// on the monitor.
+    pub fn write_brightness_percent(&self, percent: u32) -> bool {
+        match self.scale_percent(percent) {
+            Some(value) => self.write_raw(value),
+            None => false,
+        }
+    }
+
+    /// Reads the brightness back and reports whether it matches what
+    /// [`Self::write_brightness_percent`] would have written for `percent`.
+    ///
+    /// A monitor that does not answer counts as matched: there is nothing to compare with, and
+    /// asking again will not make it answer. That includes a monitor whose brightness range is
+    /// still unknown, because [`Self::scale_percent`] only fails when the read did not answer.
+    /// False means the monitor answered with another value, so the caller may resend once.
+    pub fn verify_brightness(&self, percent: u32) -> bool {
+        let value = match self.scale_percent(percent) {
+            Some(value) => value,
+            None => return true,
+        };
+        match self.brightness() {
+            Some(b) => b.current == value,
+            None => true,
+        }
+    }
+
     /// Sets brightness as a percentage (0-100), scaled to the monitor's own range.
     ///
     /// `SetVCPFeature` succeeding only means the command was sent, so the value is read back
     /// and sent again if the monitor did not take it. Returns false when the command could not
     /// be sent at all (a stale handle); a monitor that keeps ignoring the write still counts as
     /// reached, since asking again will not change its mind.
+    ///
+    /// This is the CLI's single deliberate write. The server writes without verifying during a
+    /// drag and verifies once at the end instead.
     pub fn set_brightness_percent(&self, percent: u32) -> bool {
-        let max = match self.max.get() {
-            Some(max) => max,
-            None => match self.brightness() {
-                Some(b) => b.max,
-                None => return false,
-            },
-        };
-        let value = (percent.min(100) * max + 50) / 100;
         for _ in 0..=VERIFY_RESENDS {
-            if !self.write_raw(value) {
+            if !self.write_brightness_percent(percent) {
                 return false;
             }
-            match self.brightness() {
-                Some(b) if b.current != value => continue,
-                // Landed, or the monitor does not answer right now: nothing to compare with.
-                _ => break,
+            if self.verify_brightness(percent) {
+                break;
             }
         }
         true
