@@ -504,10 +504,10 @@ fn main() {
                 WindowEvent::CloseRequested => app.hide(),
                 // Monitors come and go (sleep, hot-plug, remote sessions): refresh when the
                 // user comes back to the window, at most every few seconds.
-                WindowEvent::Focused(true) => {
-                    if app.last_scan.is_none_or(|t| t.elapsed().as_secs() >= 3) {
-                        app.scan();
-                    }
+                WindowEvent::Focused(true)
+                    if app.last_scan.is_none_or(|t| t.elapsed().as_secs() >= 3) =>
+                {
+                    app.scan();
                 }
                 _ => {}
             },
