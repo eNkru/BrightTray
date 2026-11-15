@@ -86,7 +86,7 @@ One command per line, local connections only.
 
 | Command | Reply |
 |---|---|
-| `list` | `index\tcurrent\tmax\tdescription` per monitor, then an empty line |
+| `list` | `index\tcurrent\tmax\tname` per monitor, then an empty line |
 | `get <index>` | `current max`, or `err` |
 | `set <index> <0-100>` | none |
 | `getall` | brightness percent of the first DDC/CI monitor, or `err` |
