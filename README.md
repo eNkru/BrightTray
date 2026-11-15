@@ -82,7 +82,7 @@ A hook inside `ShellHost.exe` makes the hidden brightness tile applicable and fo
 
 <br>
 
-One command per line, local connections only.
+One command per line, local connections only. Only the user who started BrightTray can connect to the pipe, and a low-integrity process cannot write to it.
 
 | Command | Reply |
 |---|---|
