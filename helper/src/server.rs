@@ -247,7 +247,7 @@ fn write_due(
     let due: Vec<(usize, u32)> = pending
         .iter()
         .filter(|&(&i, _)| write_allowed(throttle.get(&i)))
-        .map(|&(&i, &p)| (i, p))
+        .map(|(i, &p)| (*i, p))
         .collect();
     for &(i, _) in &due {
         pending.remove(&i);
