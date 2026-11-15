@@ -13,24 +13,42 @@
 //! Writes are paced rather than verified per step: a drag sends at most one write per monitor
 //! per [`WRITE_INTERVAL`], always carrying the newest value, and the read-back happens once
 //! [`VERIFY_DELAY`] after the last write. A read (`get`, `getall`, `list`) writes the pending
-//! value out first, so its answer is the value that was last asked for.
+//! value out first, so its answer is the value that was last asked for — unless the rate cap
+//! defers that write, in which case the read answers with the value the monitor shows now.
+//!
+//! The pipe is created with an explicit security descriptor: full access for the current user's
+//! SID only, plus a medium-integrity mandatory label, so no other local account can connect and
+//! no low-integrity process can write. The write rate is capped per monitor at
+//! [`WRITE_RATE_LIMIT`] writes per second; a write that would exceed the cap is deferred, never
+//! dropped.
 
 use std::collections::{BTreeMap, HashMap};
+use std::ffi::c_void;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::os::windows::io::FromRawHandle;
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use windows::core::w;
+use windows::core::{w, HSTRING, PWSTR};
 use windows::Win32::Foundation::{
-    ERROR_ACCESS_DENIED, ERROR_PIPE_CONNECTED, HANDLE, INVALID_HANDLE_VALUE,
+    CloseHandle, LocalFree, BOOL, ERROR_ACCESS_DENIED, ERROR_PIPE_CONNECTED, HANDLE, HLOCAL,
+    INVALID_HANDLE_VALUE,
+};
+use windows::Win32::Security::Authorization::{
+    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+};
+use windows::Win32::Security::{
+    GetTokenInformation, TokenUser, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY,
+    TOKEN_USER,
 };
 use windows::Win32::Storage::FileSystem::{FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX};
 use windows::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
     PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
+use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 use crate::{ddc, slider};
 
@@ -45,6 +63,60 @@ const WRITE_INTERVAL: Duration = Duration::from_millis(300);
 /// that window. Retuning this below [`WRITE_INTERVAL`] would silently break the per-monitor
 /// write cadence.
 const VERIFY_DELAY: Duration = Duration::from_millis(500);
+/// How many monitor writes per second are allowed, per monitor. No monitor may be written more
+/// than this often, whichever code path asks for the write — the normal write path, the write a
+/// read forces out, the trailing read-back resend, or the stale-handle retry. A write that would
+/// exceed the cap is deferred, never dropped.
+const WRITE_RATE_LIMIT: u32 = 10;
+
+/// The shortest gap the budget allows between two writes to the same monitor: one second over
+/// [`WRITE_RATE_LIMIT`].
+const BUDGET_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / WRITE_RATE_LIMIT as u64);
+
+/// A per-monitor write budget: at most one write per [`BUDGET_INTERVAL`].
+///
+/// The budget is a token bucket that holds a single token and refills [`WRITE_RATE_LIMIT`] times
+/// per second. A write takes the token; when the token is gone the write is deferred, not
+/// dropped. The capacity of one is what makes the cap strict: no one-second window ever holds
+/// more than [`WRITE_RATE_LIMIT`] writes, not even in a burst.
+struct WriteBudget {
+    /// Whether the token is available.
+    ready: bool,
+    /// When the token becomes available again.
+    next: Instant,
+}
+
+impl WriteBudget {
+    fn new(now: Instant) -> Self {
+        WriteBudget {
+            ready: true,
+            next: now,
+        }
+    }
+
+    /// Consumes the token when it is available. `false` means the budget is empty and the write
+    /// must be deferred.
+    fn take(&mut self, now: Instant) -> bool {
+        if !self.ready && now >= self.next {
+            self.ready = true;
+        }
+        if !self.ready {
+            return false;
+        }
+        self.ready = false;
+        self.next = now + BUDGET_INTERVAL;
+        true
+    }
+
+    /// The earliest moment a write may go out again, for the worker's sleep deadline.
+    fn next_token(&self, now: Instant) -> Instant {
+        if self.ready || now >= self.next {
+            now
+        } else {
+            self.next
+        }
+    }
+}
 
 /// Which monitors `getall` / `setall` and the Windows slider act on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,6 +182,8 @@ fn worker(rx: Receiver<Cmd>, mut target: Target) {
     let mut throttle: BTreeMap<usize, Instant> = BTreeMap::new();
     // The trailing read-back: the value that was written, and when it is due.
     let mut verify: BTreeMap<usize, (u32, Instant)> = BTreeMap::new();
+    // The per-monitor write budget, to keep [`WRITE_RATE_LIMIT`] writes per second.
+    let mut budgets: BTreeMap<usize, WriteBudget> = BTreeMap::new();
 
     fn probe(monitors: &[ddc::Monitor]) -> Vec<bool> {
         monitors.iter().map(|m| m.brightness().is_some()).collect()
@@ -118,7 +192,7 @@ fn worker(rx: Receiver<Cmd>, mut target: Target) {
     loop {
         // Sleep until the next write or read-back is due. With nothing scheduled there is no
         // deadline and the worker blocks until a command arrives.
-        let first = match next_deadline(&pending, &throttle, &verify) {
+        let first = match next_deadline(&pending, &throttle, &verify, &budgets) {
             Some(deadline) => {
                 let wait = deadline.saturating_duration_since(Instant::now());
                 match rx.recv_timeout(wait) {
@@ -156,7 +230,13 @@ fn worker(rx: Receiver<Cmd>, mut target: Target) {
                         target = new_target;
                     }
                     Cmd::Get(i, reply) => {
-                        if flush(&mut monitors, &mut pending, &mut throttle, &mut verify) {
+                        if flush(
+                            &mut monitors,
+                            &mut pending,
+                            &mut throttle,
+                            &mut verify,
+                            &mut budgets,
+                        ) {
                             capable = None;
                         }
                         let line = match monitors.get(i).and_then(|m| m.brightness()) {
@@ -166,7 +246,13 @@ fn worker(rx: Receiver<Cmd>, mut target: Target) {
                         let _ = reply.send(line);
                     }
                     Cmd::GetAll(reply) => {
-                        if flush(&mut monitors, &mut pending, &mut throttle, &mut verify) {
+                        if flush(
+                            &mut monitors,
+                            &mut pending,
+                            &mut throttle,
+                            &mut verify,
+                            &mut budgets,
+                        ) {
                             capable = None;
                         }
                         // The hook polls this; skip monitors already known not to answer so
@@ -182,10 +268,22 @@ fn worker(rx: Receiver<Cmd>, mut target: Target) {
                         let _ = reply.send(line);
                     }
                     Cmd::List(reply) => {
-                        flush(&mut monitors, &mut pending, &mut throttle, &mut verify);
+                        flush(
+                            &mut monitors,
+                            &mut pending,
+                            &mut throttle,
+                            &mut verify,
+                            &mut budgets,
+                        );
                         // Re-enumerate so hot-plugged monitors show up. The cadence state follows
                         // the monitors that survived, by key rather than by index.
-                        reenumerate(&mut monitors, &mut pending, &mut throttle, &mut verify);
+                        reenumerate(
+                            &mut monitors,
+                            &mut pending,
+                            &mut throttle,
+                            &mut verify,
+                            &mut budgets,
+                        );
                         capable = None;
                         let mut out = String::new();
                         for (i, m) in monitors.iter().enumerate() {
@@ -202,26 +300,47 @@ fn worker(rx: Receiver<Cmd>, mut target: Target) {
             }
         }
 
-        if write_due(&mut monitors, &mut pending, &mut throttle, &mut verify) {
+        if write_due(
+            &mut monitors,
+            &mut pending,
+            &mut throttle,
+            &mut verify,
+            &mut budgets,
+        ) {
             capable = None;
         }
-        if verify_due(&mut monitors, &mut pending, &mut throttle, &mut verify) {
+        if verify_due(
+            &mut monitors,
+            &mut pending,
+            &mut throttle,
+            &mut verify,
+            &mut budgets,
+        ) {
             capable = None;
         }
     }
 }
 
-/// The earliest moment the worker has to wake up: when a throttled value may be written, or
-/// when a trailing read-back falls due.
+/// The earliest moment the worker has to wake up: when a throttled value may be written, when
+/// a trailing read-back falls due, or when a deferred write's budget has refilled a token.
 fn next_deadline(
     pending: &BTreeMap<usize, u32>,
     throttle: &BTreeMap<usize, Instant>,
     verify: &BTreeMap<usize, (u32, Instant)>,
+    budgets: &BTreeMap<usize, WriteBudget>,
 ) -> Option<Instant> {
-    let writes = pending.keys().map(|i| match throttle.get(i) {
-        Some(last) => *last + WRITE_INTERVAL,
-        // Never written to: the first value of a drag goes out immediately.
-        None => Instant::now(),
+    let now = Instant::now();
+    let writes = pending.keys().map(|i| {
+        let throttled = match throttle.get(i) {
+            Some(last) => *last + WRITE_INTERVAL,
+            // Never written to: the first value of a drag goes out immediately.
+            None => now,
+        };
+        let budgeted = match budgets.get(i) {
+            Some(budget) => budget.next_token(now),
+            None => now,
+        };
+        throttled.max(budgeted)
     });
     let reads = verify.values().map(|(_, due)| *due);
     writes.chain(reads).min()
@@ -243,29 +362,32 @@ fn write_due(
     pending: &mut BTreeMap<usize, u32>,
     throttle: &mut BTreeMap<usize, Instant>,
     verify: &mut BTreeMap<usize, (u32, Instant)>,
+    budgets: &mut BTreeMap<usize, WriteBudget>,
 ) -> bool {
     let due: Vec<(usize, u32)> = pending
         .iter()
         .filter(|&(&i, _)| write_allowed(throttle.get(&i)))
-        .map(|&(&i, &p)| (i, p))
+        .map(|(i, &p)| (*i, p))
         .collect();
     for &(i, _) in &due {
         pending.remove(&i);
     }
-    write_values(monitors, due, pending, throttle, verify)
+    write_values(monitors, due, pending, throttle, verify, budgets)
 }
 
 /// Writes every pending value out now, ignoring the throttle window: a read has to answer with
 /// the value that was last requested, not with the one that happened to reach the monitor.
-/// Returns true if the monitor list was re-enumerated.
+/// The rate cap still applies: a value the cap defers stays pending, and the read answers with
+/// the value the monitor shows now. Returns true if the monitor list was re-enumerated.
 fn flush(
     monitors: &mut Vec<ddc::Monitor>,
     pending: &mut BTreeMap<usize, u32>,
     throttle: &mut BTreeMap<usize, Instant>,
     verify: &mut BTreeMap<usize, (u32, Instant)>,
+    budgets: &mut BTreeMap<usize, WriteBudget>,
 ) -> bool {
     let values: Vec<(usize, u32)> = std::mem::take(pending).into_iter().collect();
-    write_values(monitors, values, pending, throttle, verify)
+    write_values(monitors, values, pending, throttle, verify, budgets)
 }
 
 /// Sends `values` in monitor order, records the write time and schedules the trailing read-back.
@@ -279,6 +401,7 @@ fn write_values(
     pending: &mut BTreeMap<usize, u32>,
     throttle: &mut BTreeMap<usize, Instant>,
     verify: &mut BTreeMap<usize, (u32, Instant)>,
+    budgets: &mut BTreeMap<usize, WriteBudget>,
 ) -> bool {
     // A client can name any index: one that is not a monitor has nothing to write to and must
     // not leave a throttle entry behind for a monitor that never existed.
@@ -288,17 +411,41 @@ fn write_values(
         .collect();
     let mut refreshed = false;
     for (key, p) in batch {
-        let ok = match index_of(monitors, &key) {
-            Some(i) => monitors[i].write_brightness_percent(p),
-            None => false,
+        // The token is taken before the write, not after: a write the budget refuses must not
+        // reach the monitor at all.
+        let Some(i) = index_of(monitors, &key) else {
+            continue;
         };
+        let now = Instant::now();
+        if !budgets
+            .entry(i)
+            .or_insert_with(|| WriteBudget::new(now))
+            .take(now)
+        {
+            // The budget is exhausted: keep the value pending and write it on a later tick.
+            pending.insert(i, p);
+            continue;
+        }
+        let ok = monitors[i].write_brightness_percent(p);
         if !ok && !refreshed {
             // Handles go stale after sleep or hot-plug: refresh once and retry.
-            reenumerate(monitors, pending, throttle, verify);
+            reenumerate(monitors, pending, throttle, verify, budgets);
             refreshed = true;
-            if let Some(i) = index_of(monitors, &key) {
-                monitors[i].write_brightness_percent(p);
+            // The retry is a second write to the monitor, so it takes a token of its own. When
+            // the budget is empty the value stays pending instead of going out unchecked.
+            let Some(i) = index_of(monitors, &key) else {
+                continue;
+            };
+            let now = Instant::now();
+            if !budgets
+                .entry(i)
+                .or_insert_with(|| WriteBudget::new(now))
+                .take(now)
+            {
+                pending.insert(i, p);
+                continue;
             }
+            monitors[i].write_brightness_percent(p);
         }
         let Some(i) = index_of(monitors, &key) else {
             // The monitor went away with the refresh; there is nothing to pace or verify.
@@ -327,6 +474,7 @@ fn reenumerate(
     pending: &mut BTreeMap<usize, u32>,
     throttle: &mut BTreeMap<usize, Instant>,
     verify: &mut BTreeMap<usize, (u32, Instant)>,
+    budgets: &mut BTreeMap<usize, WriteBudget>,
 ) {
     let old_keys: Vec<String> = monitors.iter().map(|m| m.key()).collect();
     *monitors = ddc::enumerate();
@@ -352,6 +500,10 @@ fn reenumerate(
         .into_iter()
         .filter_map(|(i, v)| remap(i).map(|i| (i, v)))
         .collect();
+    *budgets = std::mem::take(budgets)
+        .into_iter()
+        .filter_map(|(i, b)| remap(i).map(|i| (i, b)))
+        .collect();
 }
 
 /// Runs the trailing read-backs that are due. A monitor that answered with another value is
@@ -362,6 +514,7 @@ fn verify_due(
     pending: &mut BTreeMap<usize, u32>,
     throttle: &mut BTreeMap<usize, Instant>,
     verify: &mut BTreeMap<usize, (u32, Instant)>,
+    budgets: &mut BTreeMap<usize, WriteBudget>,
 ) -> bool {
     let now = Instant::now();
     // The monitors to read back, identified by key: an index only means something for one
@@ -386,16 +539,35 @@ fn verify_due(
         if matched {
             continue;
         }
-        let sent = match index_of(monitors, &key) {
-            Some(i) => monitors[i].write_brightness_percent(p),
-            None => false,
+        // The resend is a write too: take a token first, so a lying monitor cannot double the
+        // rate through the read-back path. When the budget is empty the resend is deferred.
+        let Some(i) = index_of(monitors, &key) else {
+            continue;
         };
+        let now = Instant::now();
+        let budget = budgets.entry(i).or_insert_with(|| WriteBudget::new(now));
+        if !budget.take(now) {
+            // Deferred, not dropped: the resend stays due and is tried once the budget refills.
+            verify.insert(i, (p, budget.next_token(now)));
+            continue;
+        }
+        let sent = monitors[i].write_brightness_percent(p);
         if !sent && !refreshed {
-            reenumerate(monitors, pending, throttle, verify);
+            // Handles go stale after sleep or hot-plug: refresh once and retry. The retry is a
+            // write of its own, so it takes a token of its own.
+            reenumerate(monitors, pending, throttle, verify, budgets);
             refreshed = true;
-            if let Some(i) = index_of(monitors, &key) {
-                monitors[i].write_brightness_percent(p);
+            let Some(i) = index_of(monitors, &key) else {
+                continue;
+            };
+            let now = Instant::now();
+            let budget = budgets.entry(i).or_insert_with(|| WriteBudget::new(now));
+            if !budget.take(now) {
+                // Deferred, not dropped: the resend stays due until the budget refills.
+                verify.insert(i, (p, budget.next_token(now)));
+                continue;
             }
+            monitors[i].write_brightness_percent(p);
         }
         // A resend is a write: it opens the same window, so the next value of a drag waits.
         if let Some(i) = index_of(monitors, &key) {
@@ -443,6 +615,116 @@ fn handle_client(pipe: &File, tx: &Sender<Cmd>) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Prints the fallback warning once: the pipe's security descriptor could not be built, so the
+/// server keeps the default descriptor. The server must still start — a weaker ACL beats not
+/// starting at all, but the user should know what is lost.
+fn warn_default_security() {
+    static WARNED: OnceLock<()> = OnceLock::new();
+    if WARNED.set(()).is_ok() {
+        eprintln!(
+            "pipe server: could not build the pipe security descriptor; \
+             any process running as the same user can connect"
+        );
+    }
+}
+
+/// UTF-16 → `String`, the same tiny helper the other modules of this crate use.
+fn wide_to_string(buffer: &[u16]) -> String {
+    let len = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+    String::from_utf16_lossy(&buffer[..len])
+}
+
+/// The current user's SID as a string ("S-1-5-21-…"), read from the running process's own token
+/// so the descriptor is correct for any account and locale. `None` when any step fails.
+fn current_user_sid() -> Option<String> {
+    unsafe {
+        let mut token = HANDLE::default();
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).ok()?;
+        // The first call always fails (the buffer is too small) but fills in the length.
+        let mut len: u32 = 0;
+        let _ = GetTokenInformation(token, TokenUser, None, 0, &mut len);
+        if len == 0 {
+            let _ = CloseHandle(token);
+            return None;
+        }
+        let mut buffer = vec![0u8; len as usize];
+        let mut returned: u32 = 0;
+        let result = GetTokenInformation(
+            token,
+            TokenUser,
+            Some(buffer.as_mut_ptr() as *mut c_void),
+            len,
+            &mut returned,
+        );
+        let _ = CloseHandle(token);
+        result.ok()?;
+
+        // `buffer` is a `Vec<u8>` (align 1), so read the struct out unaligned rather than
+        // creating a reference to a possibly misaligned `TOKEN_USER`.
+        let token_user = std::ptr::read_unaligned(buffer.as_ptr() as *const TOKEN_USER);
+        let mut sid_string = PWSTR::null();
+        ConvertSidToStringSidW(token_user.User.Sid, &mut sid_string).ok()?;
+        let text = wide_to_string(sid_string.as_wide());
+        let _ = LocalFree(HLOCAL(sid_string.0 as *mut c_void));
+        Some(text)
+    }
+}
+
+/// The pipe's security attributes.
+///
+/// `SECURITY_ATTRIBUTES` holds a raw pointer, so it is neither `Send` nor `Sync` on its own.
+/// The descriptor behind it is built once, is never written to again and is only read — by the
+/// kernel, when a pipe instance is created — so handing it to the threads that serve clients
+/// cannot race.
+struct PipeSecurity(SECURITY_ATTRIBUTES);
+
+// SAFETY: the wrapped descriptor is immutable after it is built, so sharing it between
+// threads is safe.
+unsafe impl Send for PipeSecurity {}
+// SAFETY: see above.
+unsafe impl Sync for PipeSecurity {}
+
+/// Builds the pipe's security descriptor from the current user's SID. `None` when any step
+/// fails, so the caller falls back to the default descriptor instead of failing to start.
+fn build_security_attributes() -> Option<PipeSecurity> {
+    let sid = current_user_sid()?;
+    // A protected DACL naming only the user, plus an explicit medium-integrity label. There is
+    // deliberately no ACE for SYSTEM or the administrators group: the pipe belongs to the user
+    // who started BrightTray, and to nobody else.
+    let sddl_text = format!("D:P(A;;GA;;;{sid})S:(ML;;NW;;;ME)");
+    let sddl = HSTRING::from(sddl_text.as_str());
+    let mut descriptor = PSECURITY_DESCRIPTOR(std::ptr::null_mut());
+    let mut size: u32 = 0;
+    unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            &sddl,
+            SDDL_REVISION_1,
+            &mut descriptor,
+            Some(&mut size),
+        )
+        .ok()?;
+    }
+    Some(PipeSecurity(SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor.0,
+        bInheritHandle: BOOL(0),
+    }))
+}
+
+/// The pipe's security descriptor, built once and kept for the lifetime of the process: every
+/// pipe instance must present the same one. `None` when the descriptor could not be built, in
+/// which case the server falls back to the default descriptor of its token.
+fn security_attributes() -> Option<&'static SECURITY_ATTRIBUTES> {
+    static ATTRIBUTES: OnceLock<Option<PipeSecurity>> = OnceLock::new();
+    // The SECURITY_DESCRIPTOR behind the attributes is deliberately leaked: `CreateNamedPipeW`
+    // reads it for the life of the process, the process is its only owner, and it is one small,
+    // one-time allocation.
+    ATTRIBUTES
+        .get_or_init(build_security_attributes)
+        .as_ref()
+        .map(|security| &security.0)
+}
+
 fn create_instance(first: bool) -> std::io::Result<HANDLE> {
     // The first instance claims the name: if another helper already serves it, fail loudly
     // instead of silently running two servers and two injectors side by side.
@@ -451,6 +733,10 @@ fn create_instance(first: bool) -> std::io::Result<HANDLE> {
     } else {
         PIPE_ACCESS_DUPLEX
     };
+    let security = security_attributes();
+    if security.is_none() {
+        warn_default_security();
+    }
     let handle = unsafe {
         CreateNamedPipeW(
             w!(r"\\.\pipe\BrightTray"),
@@ -460,7 +746,7 @@ fn create_instance(first: bool) -> std::io::Result<HANDLE> {
             4096,
             4096,
             0,
-            None,
+            security.map(|sa| sa as *const SECURITY_ATTRIBUTES),
         )
     };
     if handle == INVALID_HANDLE_VALUE {
