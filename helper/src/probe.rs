@@ -6,6 +6,7 @@
 
 use std::ffi::c_void;
 
+use crate::osver;
 use windows::core::{s, w, IInspectable, Interface, HRESULT, HSTRING};
 use windows::Foundation::{IPropertyValue, PropertyType};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
@@ -19,10 +20,56 @@ type GetIdFn = unsafe extern "system" fn(*mut c_void, *mut *mut c_void) -> HRESU
 type GetValueFn = unsafe extern "system" fn(*mut c_void, *mut c_void, *mut *mut c_void) -> HRESULT;
 
 const SETTING_ID: &str = "SystemSettings_Display_Brightness";
+// ISettingItem vtable slots (IInspectable occupies 0..=5).
 const SLOT_GET_ID: usize = 6;
 const SLOT_IS_ENABLED: usize = 9;
 const SLOT_IS_APPLICABLE: usize = 10;
 const SLOT_GET_VALUE: usize = 13;
+const SLOT_SET_VALUE: usize = 14;
+const SLOT_ADD_HANDLER: usize = 18;
+const SLOT_REMOVE_HANDLER: usize = 19;
+// IQuickAction vtable slots (IInspectable occupies 0..=5).
+const QA_SLOT_GET_ID: usize = 7;
+const QA_SLOT_GET_FRIENDLY_NAME: usize = 8;
+const QA_SLOT_IS_APPLICABLE: usize = 9;
+const QA_SLOT_IS_ENABLED: usize = 10;
+const QA_SLOT_STATUS: usize = 12;
+const QA_SLOT_IS_ACTIVE: usize = 14;
+const QA_SLOT_ADD_HANDLER: usize = 19;
+const QA_SLOT_REMOVE_HANDLER: usize = 20;
+const QA_SLOT_GET_VALUE: usize = 21;
+const QA_SLOT_SET_VALUE: usize = 22;
+
+/// Prints one vtable's slots, pointer by pointer.
+///
+/// A `DUPLICATE` mark is the signature of a table shifted by one slot: the hook refuses to
+/// patch such a table, so seeing it here is how a new Windows build is diagnosed without
+/// injecting anything.
+unsafe fn print_vtable_slots(
+    title: &str,
+    vtable: *mut usize,
+    base: usize,
+    size: usize,
+    slots: &[(usize, &str)],
+) {
+    println!("{title}");
+    for (slot, name) in slots {
+        let pointer = *vtable.add(*slot);
+        let inside = pointer >= base && pointer < base + size;
+        let duplicate = slots
+            .iter()
+            .any(|(other, _)| other != slot && *vtable.add(*other) == pointer);
+        println!(
+            "  slot {slot:2} {name:26} = 0x{pointer:X} ({}){}",
+            if inside {
+                "in module"
+            } else {
+                "OUTSIDE MODULE"
+            },
+            if duplicate { "  DUPLICATE" } else { "" }
+        );
+    }
+}
 
 unsafe fn hstring(raw: *mut c_void) -> String {
     if raw.is_null() {
@@ -47,6 +94,11 @@ unsafe fn module_range(module: windows::Win32::Foundation::HMODULE) -> (usize, u
 pub fn probe() -> Result<(), String> {
     unsafe {
         let _ = RoInitialize(RO_INIT_MULTITHREADED);
+        println!(
+            "Windows build {} (Quick Settings needs {}+)",
+            osver::build(),
+            osver::MIN_QUICK_SETTINGS_BUILD
+        );
         let module = match GetModuleHandleW(w!("SettingsHandlers_PCDisplay.dll")) {
             Ok(module) => module,
             Err(_) => LoadLibraryW(w!("SettingsHandlers_PCDisplay.dll"))
@@ -70,24 +122,21 @@ pub fn probe() -> Result<(), String> {
 
         let vtable = *(instance as *mut *mut usize);
         println!("vtable = 0x{:X}", vtable as usize);
-        let slots = [
-            ("get_Id", SLOT_GET_ID),
-            ("get_IsEnabled", SLOT_IS_ENABLED),
-            ("get_IsApplicable", SLOT_IS_APPLICABLE),
-            ("GetValue", SLOT_GET_VALUE),
-        ];
-        for (name, slot) in slots {
-            let pointer = *vtable.add(slot);
-            let inside = pointer >= base && pointer < base + size;
-            println!(
-                "  slot {slot:2} {name:18} = 0x{pointer:X} ({})",
-                if inside {
-                    "in module"
-                } else {
-                    "OUTSIDE MODULE"
-                }
-            );
-        }
+        print_vtable_slots(
+            "ISettingItem (SettingsHandlers_PCDisplay):",
+            vtable,
+            base,
+            size,
+            &[
+                (SLOT_GET_ID, "get_Id"),
+                (SLOT_IS_ENABLED, "get_IsEnabled"),
+                (SLOT_IS_APPLICABLE, "get_IsApplicable"),
+                (SLOT_GET_VALUE, "GetValue"),
+                (SLOT_SET_VALUE, "SetValue"),
+                (SLOT_ADD_HANDLER, "add_SettingChanged"),
+                (SLOT_REMOVE_HANDLER, "remove_SettingChanged"),
+            ],
+        );
 
         for (name, slot) in [
             ("get_IsEnabled", SLOT_IS_ENABLED),
@@ -192,6 +241,25 @@ pub fn probe() -> Result<(), String> {
                         if hr.is_ok() && !action.is_null() {
                             let action_vtable = *(action as *mut *mut usize);
                             println!("Brightness action vtable = 0x{:X}", action_vtable as usize);
+                            let (qa_base, qa_size) = module_range(qa_module);
+                            print_vtable_slots(
+                                "IQuickAction (QuickActionsDataModel):",
+                                action_vtable,
+                                qa_base,
+                                qa_size,
+                                &[
+                                    (QA_SLOT_GET_ID, "get_Id"),
+                                    (QA_SLOT_GET_FRIENDLY_NAME, "get_FriendlyName"),
+                                    (QA_SLOT_IS_APPLICABLE, "get_IsApplicable"),
+                                    (QA_SLOT_IS_ENABLED, "get_IsEnabled"),
+                                    (QA_SLOT_STATUS, "get_QuickActionStatus"),
+                                    (QA_SLOT_IS_ACTIVE, "get_QuickActionIsActive"),
+                                    (QA_SLOT_ADD_HANDLER, "add_QuickActionPropertyChanged"),
+                                    (QA_SLOT_REMOVE_HANDLER, "remove_QuickActionPropertyChanged"),
+                                    (QA_SLOT_GET_VALUE, "GetValue"),
+                                    (QA_SLOT_SET_VALUE, "SetValue"),
+                                ],
+                            );
                             let get_applicable: unsafe extern "system" fn(
                                 *mut c_void,
                                 *mut u8,

@@ -3,6 +3,7 @@
 
 pub mod ddc;
 pub mod inject;
+pub mod osver;
 pub mod probe;
 pub mod server;
 pub mod slider;

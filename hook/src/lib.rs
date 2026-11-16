@@ -927,6 +927,142 @@ fn in_module(pointer: usize, base: usize, size: usize) -> bool {
     pointer >= base && pointer < base + size
 }
 
+/// The shape of a probe: what the slot under test is expected to answer with.
+#[derive(Clone, Copy)]
+enum SlotProbe {
+    /// `get_IsEnabled` / `get_IsApplicable` / `get_QuickActionIsActive`: a bool out-parameter.
+    Flag,
+    /// `get_QuickActionStatus`: an `IInspectable` the caller owns.
+    Status,
+    /// `GetValue(name, out)`: an `IInspectable` the caller owns, asked for `"Value"`.
+    Value,
+}
+
+/// Refuses a slot table in which two semantic slots name the same function.
+///
+/// The address range check only proves a pointer lies inside the module. A Windows build that
+/// shifts the whole table by one slot leaves every pointer inside the module, and several of
+/// our slots land on the same neighbour - which this catches before anything is patched.
+fn check_distinct(slots: &[(usize, usize)]) -> Result<(), String> {
+    for (index, (slot, pointer)) in slots.iter().enumerate() {
+        for (other_slot, other_pointer) in &slots[index + 1..] {
+            if pointer == other_pointer {
+                return Err(format!(
+                    "slots {slot} and {other_slot} share one function (0x{pointer:X}); \
+                     the vtable is not the one this hook expects"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Calls one vtable slot for real before it is patched.
+///
+/// A pointer inside the module can still be the wrong function. A call that does not answer is
+/// the evidence that the slot table is not the one the constants describe.
+unsafe fn probe_slot(
+    this: *mut c_void,
+    vtable: *mut usize,
+    slot: usize,
+    probe: SlotProbe,
+) -> Result<(), String> {
+    let pointer = *vtable.add(slot);
+    match probe {
+        SlotProbe::Flag => {
+            let function: GetBoolFn = std::mem::transmute(pointer);
+            let mut value = 0u8;
+            let hr = function(this, &mut value);
+            if hr.is_err() {
+                return Err(format!(
+                    "slot {slot} did not answer (bool) -> 0x{:08X}",
+                    hr.0 as u32
+                ));
+            }
+        }
+        SlotProbe::Status => {
+            let function: GetIdFn = std::mem::transmute(pointer);
+            let mut out: *mut c_void = std::ptr::null_mut();
+            let hr = function(this, &mut out);
+            if hr.is_ok() && !out.is_null() {
+                // The status is an IInspectable; wrapping it takes the caller's reference.
+                let _ = IInspectable::from_raw(out);
+            }
+            if hr.is_err() {
+                return Err(format!(
+                    "slot {slot} did not answer (status) -> 0x{:08X}",
+                    hr.0 as u32
+                ));
+            }
+        }
+        SlotProbe::Value => {
+            let function: GetValueFn = std::mem::transmute(pointer);
+            let name = HSTRING::from("Value");
+            let raw_name: *mut c_void = std::mem::transmute_copy(&name);
+            let mut out: *mut c_void = std::ptr::null_mut();
+            let hr = function(this, raw_name, &mut out);
+            if hr.is_ok() && !out.is_null() {
+                let _ = IInspectable::from_raw(out);
+            }
+            if hr.is_err() {
+                return Err(format!(
+                    "slot {slot} did not answer (GetValue) -> 0x{:08X}",
+                    hr.0 as u32
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A comma-separated slot list for the log, so a shift shows up as a diff in the log.
+fn slot_list(slots: &[usize]) -> String {
+    slots
+        .iter()
+        .map(|slot| slot.to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+#[repr(C)]
+struct OsVersionInfoW {
+    size: u32,
+    major: u32,
+    minor: u32,
+    build: u32,
+    platform_id: u32,
+    csd_version: [u16; 128],
+}
+
+#[link(name = "ntdll")]
+unsafe extern "system" {
+    /// Unlike `GetVersionEx`, this is not subject to manifest-based version lies.
+    fn RtlGetVersion(info: *mut OsVersionInfoW) -> i32;
+}
+
+/// The Windows build number, for the log. `0` when it could not be read.
+///
+/// The hook is a separate cdylib and deliberately does not depend on the helper crate, so this
+/// repeats the small `RtlGetVersion` call instead of importing `osver`.
+fn windows_build() -> u32 {
+    static BUILD: OnceLock<u32> = OnceLock::new();
+    *BUILD.get_or_init(|| {
+        let mut info = OsVersionInfoW {
+            size: std::mem::size_of::<OsVersionInfoW>() as u32,
+            major: 0,
+            minor: 0,
+            build: 0,
+            platform_id: 0,
+            csd_version: [0; 128],
+        };
+        if unsafe { RtlGetVersion(&mut info) } == 0 {
+            info.build
+        } else {
+            0
+        }
+    })
+}
+
 /// Gets one `QuickSetting` instance from QuickActionsDataModel, verifies its identity, and
 /// patches the shared IQuickAction vtable. ControlCenter binds to this object, so this is the
 /// hook that actually makes the brightness slider appear.
@@ -978,7 +1114,7 @@ unsafe fn try_install_quick_actions() -> Result<(), String> {
             vtable as usize
         ));
     }
-    for slot in [
+    let patched = [
         QA_SLOT_GET_ID,
         QA_SLOT_GET_FRIENDLY_NAME,
         QA_SLOT_IS_APPLICABLE,
@@ -989,7 +1125,9 @@ unsafe fn try_install_quick_actions() -> Result<(), String> {
         QA_SLOT_REMOVE_HANDLER,
         QA_SLOT_GET_VALUE,
         QA_SLOT_SET_VALUE,
-    ] {
+    ];
+    let mut table = [(0usize, 0usize); 10];
+    for (pair, slot) in table.iter_mut().zip(patched) {
         let pointer = *vtable.add(slot);
         if !in_module(pointer, base, size) {
             return Err(format!(
@@ -997,7 +1135,16 @@ unsafe fn try_install_quick_actions() -> Result<(), String> {
                 base + size
             ));
         }
+        *pair = (slot, pointer);
     }
+    // Every pointer is inside the module, but a shifted table lands several slots on one
+    // function. Refuse that, and probe the slots that are safe to call, before patching.
+    check_distinct(&table)?;
+    probe_slot(action, vtable, QA_SLOT_IS_APPLICABLE, SlotProbe::Flag)?;
+    probe_slot(action, vtable, QA_SLOT_IS_ENABLED, SlotProbe::Flag)?;
+    probe_slot(action, vtable, QA_SLOT_STATUS, SlotProbe::Status)?;
+    probe_slot(action, vtable, QA_SLOT_IS_ACTIVE, SlotProbe::Flag)?;
+    probe_slot(action, vtable, QA_SLOT_GET_VALUE, SlotProbe::Value)?;
 
     let get_id: GetIdFn = std::mem::transmute(*vtable.add(QA_SLOT_GET_ID));
     let mut returned_id: *mut c_void = std::ptr::null_mut();
@@ -1076,8 +1223,11 @@ unsafe fn try_install_quick_actions() -> Result<(), String> {
         ],
     )?;
     log(format!(
-        "IQuickAction hook installed: vtable=0x{:X} action=0x{:X}",
-        vtable as usize, action as usize
+        "IQuickAction hook installed: build={} vtable=0x{:X} action=0x{:X} slots={}",
+        windows_build(),
+        vtable as usize,
+        action as usize,
+        slot_list(&patched)
     ));
     Ok(())
 }
@@ -1106,7 +1256,7 @@ unsafe fn try_install() -> Result<(), String> {
         return Err("GetSetting returned an object without a vtable".to_string());
     }
     let (base, size) = module_range(module)?;
-    for slot in [
+    let patched = [
         SLOT_GET_ID,
         SLOT_IS_ENABLED,
         SLOT_IS_APPLICABLE,
@@ -1114,15 +1264,24 @@ unsafe fn try_install() -> Result<(), String> {
         SLOT_SET_VALUE,
         SLOT_ADD_HANDLER,
         SLOT_REMOVE_HANDLER,
-    ] {
+    ];
+    let mut table = [(0usize, 0usize); 7];
+    for (pair, slot) in table.iter_mut().zip(patched) {
         let pointer = *vtable.add(slot);
-        if pointer < base || pointer >= base + size {
+        if !in_module(pointer, base, size) {
             return Err(format!(
                 "vtable slot {slot} = 0x{pointer:X}, outside module 0x{base:X}..0x{:X}",
                 base + size
             ));
         }
+        *pair = (slot, pointer);
     }
+    // Every pointer is inside the module, but a shifted table lands several slots on one
+    // function. Refuse that, and probe the slots that are safe to call, before patching.
+    check_distinct(&table)?;
+    probe_slot(instance, vtable, SLOT_IS_ENABLED, SlotProbe::Flag)?;
+    probe_slot(instance, vtable, SLOT_IS_APPLICABLE, SlotProbe::Flag)?;
+    probe_slot(instance, vtable, SLOT_GET_VALUE, SlotProbe::Value)?;
 
     // Refuse to patch a vtable that does not identify itself as the brightness setting.
     let get_id: GetIdFn = std::mem::transmute(*vtable.add(SLOT_GET_ID));
@@ -1139,8 +1298,10 @@ unsafe fn try_install() -> Result<(), String> {
     }
 
     log(format!(
-        "validated {SETTING_ID}: module=0x{base:X} vtable=0x{:X}",
-        vtable as usize
+        "validated {SETTING_ID}: build={} module=0x{base:X} vtable=0x{:X} slots={}",
+        windows_build(),
+        vtable as usize,
+        slot_list(&patched)
     ));
 
     if STATE.get().is_none() {
@@ -1267,4 +1428,29 @@ pub extern "system" fn DllMain(
         });
     }
     TRUE
+}
+
+#[cfg(test)]
+mod tests {
+    //! The slot table check that runs before anything is patched. It is the one guard that
+    //! catches a table shifted by one slot: every pointer would still be inside the module.
+
+    use super::check_distinct;
+
+    #[test]
+    fn a_duplicate_function_is_refused() {
+        let error = check_distinct(&[(6, 0x1000), (9, 0x2000), (10, 0x1000)]).unwrap_err();
+        assert!(error.contains("slots 6 and 10"), "{error}");
+    }
+
+    #[test]
+    fn distinct_functions_are_accepted() {
+        assert!(check_distinct(&[(6, 0x1000), (9, 0x2000), (10, 0x3000)]).is_ok());
+    }
+
+    #[test]
+    fn an_empty_or_single_slot_table_is_accepted() {
+        assert!(check_distinct(&[]).is_ok());
+        assert!(check_distinct(&[(6, 0x1000)]).is_ok());
+    }
 }

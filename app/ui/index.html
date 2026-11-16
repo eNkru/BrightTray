@@ -242,6 +242,8 @@
       noDdcNotice: "该显示器未响应 DDC/CI，不会做任何修改。可在显示器菜单中开启 DDC/CI 后刷新。",
       idle: "未启用", running: "运行中", waiting: "等待 ShellHost…", hooking: "正在挂接快速设置…",
       missing: "找不到 brighttray_hook.dll", starting: "启动中…",
+      unsupported: "系统版本不受支持",
+      unsupportedNotice: "当前系统版本（build {build}）不受支持。快速设置亮度条需要 Windows 11 24H2（build {min}）或更新版本，未做任何修改。",
     },
     en: {
       displays: "Displays", autostart: "Start with Windows", apply: "Apply", applied: "Applied",
@@ -250,6 +252,8 @@
       noDdcNotice: "This display doesn't respond to DDC/CI, so nothing will be changed. Turn on DDC/CI in the monitor's menu, then refresh.",
       idle: "Not active", running: "Running", waiting: "Waiting for ShellHost…", hooking: "Hooking Quick Settings…",
       missing: "brighttray_hook.dll not found", starting: "Starting…",
+      unsupported: "Unsupported Windows version",
+      unsupportedNotice: "This Windows version (build {build}) isn't supported. The Quick Settings brightness slider needs Windows 11 24H2 (build {min}) or later. Nothing was changed.",
     },
   };
   const T = STRINGS[document.documentElement.lang] || STRINGS.en;
@@ -269,8 +273,11 @@
   let state = null;
   let selected = null;
   let lastHeight = 0;
+  // Set from the host's state: the Quick Settings hook cannot work on this Windows build.
+  let unsupported = false;
 
   function statusOf(s) {
+    if (unsupported) return { cls: "err", text: T.unsupported };
     if (!s.applied) return { cls: "", text: T.idle };
     switch (s.hook.kind) {
       case "hooked": return { cls: "on", text: T.running };
@@ -290,6 +297,7 @@
 
   function render() {
     if (!state) return;
+    unsupported = !!state.os && !state.os.supported;
     $("opt-autostart").checked = !!state.autostart;
 
     const keys = state.monitors.map((m) => m.key);
@@ -332,6 +340,8 @@
 
     let notice = null;
     if (state.error) notice = { kind: "err", text: state.error };
+    else if (unsupported) notice = { kind: "warn",
+      text: T.unsupportedNotice.replace("{build}", state.os.build).replace("{min}", state.os.min) };
     else if (mon && !mon.ddc) notice = { kind: "warn", text: T.noDdcNotice };
     const n = $("notice");
     n.className = "notice" + (notice ? " show k-" + notice.kind : "");
@@ -343,7 +353,7 @@
     // A background rescan (e.g. on focus) must not swallow the click that focused the window,
     // so scanning only affects the refresh button. Rust re-validates the key on apply.
     const apply = $("btn-apply");
-    apply.disabled = !mon || !mon.ddc || isApplied;
+    apply.disabled = unsupported || !mon || !mon.ddc || isApplied;
     apply.classList.toggle("done", isApplied);
     apply.innerHTML = isApplied ? CHECK + T.applied : T.apply;
 
