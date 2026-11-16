@@ -25,6 +25,7 @@ use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::Win32::System::Memory::{
     VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
 };
+use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows::Win32::System::Threading::{
     CreateEventW, CreateProcessW, CreateRemoteThread, GetExitCodeProcess, GetExitCodeThread,
     GetProcessTimes, OpenProcess, ResetEvent, ResumeThread, TerminateProcess, WaitForSingleObject,
@@ -43,6 +44,31 @@ pub fn default_dll_path() -> Result<PathBuf, String> {
         .parent()
         .ok_or_else(|| "helper executable has no parent directory".to_string())?;
     Ok(dir.join(HOOK_DLL))
+}
+
+/// The directory the loader considers the system directory, asked of Windows itself.
+///
+/// The system drive is not necessarily `C:`, so a literal `C:\Windows\System32` fails on a
+/// Windows installed elsewhere. The returned length excludes the terminating NUL; a value larger
+/// than the buffer is the required size, not a path.
+fn system_directory() -> Result<PathBuf, String> {
+    // A system directory path is far shorter than this; the check below keeps a longer one from
+    // being silently truncated.
+    let mut buffer = [0u16; 260];
+    let length = unsafe { GetSystemDirectoryW(Some(&mut buffer)) } as usize;
+    if length == 0 {
+        return Err(format!(
+            "GetSystemDirectoryW: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if length > buffer.len() {
+        return Err(format!(
+            "GetSystemDirectoryW: the system directory needs {length} UTF-16 units, buffer has {}",
+            buffer.len()
+        ));
+    }
+    Ok(PathBuf::from(String::from_utf16_lossy(&buffer[..length])))
 }
 
 fn wide_to_string(buffer: &[u16]) -> String {
@@ -238,6 +264,9 @@ pub fn inject_all(dll: &Path) -> Result<usize, String> {
 /// `IQuickAction` hook answers every later query; this path exists for builds where Quick
 /// Settings caches the brightness capability before a late hook could take effect.
 ///
+/// The shell is started from the system directory as Windows reports it, not from a literal
+/// `C:\Windows\System32`: the system drive is not always `C:`.
+///
 /// **This ends every running ShellHost process first.** The Start menu and Quick Settings
 /// disappear until the shell is back. The CLI makes the user confirm with `--force-restart`;
 /// do not reach this from an automatic path.
@@ -257,6 +286,13 @@ pub fn inject_early(dll: &Path) -> Result<u32, String> {
         .map_err(|e| format!("CreateEventW: {e}"))?;
     let _ = unsafe { ResetEvent(event) };
 
+    let shellhost = system_directory()?.join(SHELLHOST);
+    let shellhost_wide: Vec<u16> = shellhost
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
     let startup = STARTUPINFOW {
         cb: std::mem::size_of::<STARTUPINFOW>() as u32,
         ..Default::default()
@@ -264,7 +300,7 @@ pub fn inject_early(dll: &Path) -> Result<u32, String> {
     let mut process_info = PROCESS_INFORMATION::default();
     let created = unsafe {
         CreateProcessW(
-            w!("C:\\Windows\\System32\\ShellHost.exe"),
+            PCWSTR(shellhost_wide.as_ptr()),
             PWSTR::null(),
             None,
             None,
@@ -278,7 +314,7 @@ pub fn inject_early(dll: &Path) -> Result<u32, String> {
     };
     if let Err(e) = created {
         let _ = unsafe { CloseHandle(event) };
-        return Err(format!("CreateProcessW(ShellHost): {e}"));
+        return Err(format!("CreateProcessW({}): {e}", shellhost.display()));
     }
 
     let injected = unsafe { inject_inner(process_info.hProcess, process_info.dwProcessId, dll) };
@@ -487,4 +523,24 @@ pub fn watch_and_inject(dll: PathBuf, report: impl Fn(&WatchEvent) + Send + 'sta
             std::thread::sleep(Duration::from_millis(if fast { 100 } else { 500 }));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The directory must come from Windows, not from a literal: the test checks that it exists
+    /// and that the shell is looked up inside it. `ShellHost.exe` itself is not asserted on —
+    /// the Windows CI runner is a Server image, where the shell host may be absent.
+    #[test]
+    fn system_directory_is_the_loader_directory() {
+        let dir = system_directory().expect("GetSystemDirectoryW");
+        assert!(dir.is_absolute(), "{} is not absolute", dir.display());
+        assert!(dir.is_dir(), "{} is not a directory", dir.display());
+        assert_eq!(
+            dir.file_name().and_then(|name| name.to_str()),
+            Some("System32")
+        );
+        assert!(dir.join(SHELLHOST).ends_with(SHELLHOST));
+    }
 }
