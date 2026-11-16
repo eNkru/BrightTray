@@ -93,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "brighttray-app"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "brighttray-helper",
  "embed-resource",
@@ -106,14 +106,14 @@ dependencies = [
 
 [[package]]
 name = "brighttray-helper"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "windows",
 ]
 
 [[package]]
 name = "brighttray-hook"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "windows",
 ]
