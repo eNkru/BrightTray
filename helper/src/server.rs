@@ -128,33 +128,45 @@ pub enum Target {
     Monitor { key: String, name: String },
 }
 
-impl Target {
-    fn indices(&self, monitors: &[ddc::Monitor]) -> Vec<usize> {
-        match self {
-            Target::All => (0..monitors.len()).collect(),
-            Target::Monitor { key, name } => {
-                let by_key: Vec<usize> = monitors
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, m)| &m.key() == key)
-                    .map(|(i, _)| i)
-                    .collect();
-                if !by_key.is_empty() {
-                    return by_key;
-                }
-                let by_name: Vec<usize> = monitors
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, m)| &m.name == name)
-                    .map(|(i, _)| i)
-                    .collect();
-                if by_name.len() == 1 {
-                    by_name
-                } else {
-                    Vec::new()
-                }
+/// The monitors a target acts on, given their `(key, name)` pairs.
+///
+/// The key is the identity of a monitor and survives a re-enumeration as long as the display
+/// layout does not change, so it is tried first. The name is only a fallback for a layout that
+/// changed — and only when exactly one monitor carries it, because an ambiguous name must
+/// resolve to nothing rather than to the wrong display.
+fn select_indices(target: &Target, monitors: &[(String, String)]) -> Vec<usize> {
+    match target {
+        Target::All => (0..monitors.len()).collect(),
+        Target::Monitor { key, name } => {
+            let by_key: Vec<usize> = monitors
+                .iter()
+                .enumerate()
+                .filter(|(_, (k, _))| k == key)
+                .map(|(i, _)| i)
+                .collect();
+            if !by_key.is_empty() {
+                return by_key;
+            }
+            let by_name: Vec<usize> = monitors
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, n))| n == name)
+                .map(|(i, _)| i)
+                .collect();
+            if by_name.len() == 1 {
+                by_name
+            } else {
+                Vec::new()
             }
         }
+    }
+}
+
+impl Target {
+    fn indices(&self, monitors: &[ddc::Monitor]) -> Vec<usize> {
+        let pairs: Vec<(String, String)> =
+            monitors.iter().map(|m| (m.key(), m.name.clone())).collect();
+        select_indices(self, &pairs)
     }
 }
 
@@ -577,33 +589,96 @@ fn verify_due(
     refreshed
 }
 
+/// What one line of the pipe protocol asks for.
+///
+/// The variant says what the client wants; whether the client gets an answer is decided by
+/// [`Command::replies`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Command {
+    /// `list`: one line per monitor, then an empty line.
+    List,
+    /// `get <index>`: the brightness of that monitor.
+    Get(usize),
+    /// `getall`: the percent of the first targeted DDC/CI-capable monitor.
+    GetAll,
+    /// `set <index> <percent>`: a write to that monitor.
+    Set(usize, u32),
+    /// `setall <percent>`: a write to every targeted DDC/CI-capable monitor.
+    SetAll(u32),
+    /// The line does not match the protocol: answer `err`.
+    Error,
+    /// The line is a write whose value cannot be used: drop it and say nothing.
+    Dropped,
+}
+
+impl Command {
+    /// Whether the client gets a reply for this command.
+    ///
+    /// Writes never do, not even an `err`: the hook's writer thread sends a value on every
+    /// slider step, and an acknowledgement would turn the drag into a request/response round
+    /// trip on ShellHost's UI thread.
+    fn replies(&self) -> bool {
+        match self {
+            Command::List | Command::Get(_) | Command::GetAll | Command::Error => true,
+            Command::Set(_, _) | Command::SetAll(_) | Command::Dropped => false,
+        }
+    }
+}
+
+/// Parses one line of the pipe protocol into the command it asks for.
+///
+/// The line is split into at most three words, so a command has to match its exact arity;
+/// anything else is [`Command::Error`]. A write whose value does not parse is
+/// [`Command::Dropped`]: the command is thrown away and the client is told nothing.
+fn parse_command(line: &str) -> Command {
+    let mut parts = line.split_whitespace();
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some("list"), None, None) => Command::List,
+        (Some("get"), Some(i), None) => match i.parse() {
+            Ok(i) => Command::Get(i),
+            Err(_) => Command::Error,
+        },
+        (Some("getall"), None, None) => Command::GetAll,
+        (Some("set"), Some(i), Some(p)) => match (i.parse(), p.parse()) {
+            (Ok(i), Ok(p)) => Command::Set(i, p),
+            _ => Command::Dropped,
+        },
+        (Some("setall"), Some(p), None) => match p.parse() {
+            Ok(p) => Command::SetAll(p),
+            Err(_) => Command::Dropped,
+        },
+        _ => Command::Error,
+    }
+}
+
 fn handle_client(pipe: &File, tx: &Sender<Cmd>) -> std::io::Result<()> {
     let mut out = pipe;
     for line in BufReader::new(pipe).lines() {
         let line = line?;
-        let mut parts = line.split_whitespace();
+        let command = parse_command(&line);
+        // Writes answer nothing at all, so the answer is skipped before it is written.
+        let replies = command.replies();
         let (reply_tx, reply_rx) = channel();
-        let sent = match (parts.next(), parts.next(), parts.next()) {
-            (Some("list"), None, None) => tx.send(Cmd::List(reply_tx)).is_ok(),
-            (Some("get"), Some(i), None) => match i.parse() {
-                Ok(i) => tx.send(Cmd::Get(i, reply_tx)).is_ok(),
-                Err(_) => false,
-            },
-            (Some("getall"), None, None) => tx.send(Cmd::GetAll(reply_tx)).is_ok(),
-            (Some("set"), Some(i), Some(p)) => {
-                if let (Ok(i), Ok(p)) = (i.parse(), p.parse()) {
-                    let _ = tx.send(Cmd::Set(i, p));
-                }
-                continue;
+        let sent = match command {
+            Command::List => tx.send(Cmd::List(reply_tx)).is_ok(),
+            Command::Get(i) => tx.send(Cmd::Get(i, reply_tx)).is_ok(),
+            Command::GetAll => tx.send(Cmd::GetAll(reply_tx)).is_ok(),
+            Command::Set(i, p) => {
+                let _ = tx.send(Cmd::Set(i, p));
+                false
             }
-            (Some("setall"), Some(p), None) => {
-                if let Ok(p) = p.parse() {
-                    let _ = tx.send(Cmd::SetAll(p));
-                }
-                continue;
+            Command::SetAll(p) => {
+                let _ = tx.send(Cmd::SetAll(p));
+                false
             }
-            _ => false,
+            // The line does not match the protocol.
+            Command::Error => false,
+            // The write is dropped silently: the client is the shell and must not wait.
+            Command::Dropped => false,
         };
+        if !replies {
+            continue;
+        }
         let reply = if sent {
             reply_rx.recv().unwrap_or_else(|_| "err\n".to_string())
         } else {
@@ -842,5 +917,203 @@ pub fn serve() -> std::io::Result<()> {
     let _server = Server::start(Target::All)?;
     loop {
         std::thread::park();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! The decisions the pipe server makes before it touches a monitor: the write rate, the
+    //! command table and which monitors a target reaches. None of them needs a monitor, a pipe
+    //! or a Windows handle — they are the logic that decides what happens, not the DDC/CI.
+
+    use super::{
+        parse_command, select_indices, Command, Target, WriteBudget, BUDGET_INTERVAL,
+        WRITE_RATE_LIMIT,
+    };
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn the_first_write_goes_out_immediately() {
+        let t0 = Instant::now();
+        let mut budget = WriteBudget::new(t0);
+        assert!(budget.take(t0));
+    }
+
+    #[test]
+    fn a_write_inside_the_budget_window_is_refused() {
+        let t0 = Instant::now();
+        let mut budget = WriteBudget::new(t0);
+        assert!(budget.take(t0));
+        // The budget holds one token, so the next write has to wait for it.
+        assert!(!budget.take(t0 + Duration::from_millis(10)));
+    }
+
+    #[test]
+    fn the_token_is_back_after_the_budget_interval() {
+        let t0 = Instant::now();
+        let mut budget = WriteBudget::new(t0);
+        assert!(budget.take(t0));
+        assert!(!budget.take(t0 + BUDGET_INTERVAL - Duration::from_millis(1)));
+        assert!(budget.take(t0 + BUDGET_INTERVAL));
+    }
+
+    #[test]
+    fn the_budget_reports_when_the_next_write_may_go_out() {
+        let t0 = Instant::now();
+        let mut budget = WriteBudget::new(t0);
+        // An unused budget is ready right now.
+        assert_eq!(budget.next_token(t0), t0);
+        assert!(budget.take(t0));
+        assert_eq!(budget.next_token(t0), t0 + BUDGET_INTERVAL);
+    }
+
+    #[test]
+    fn a_flood_never_writes_more_than_the_rate_limit_per_second() {
+        let t0 = Instant::now();
+        let mut budget = WriteBudget::new(t0);
+        let mut writes: Vec<Duration> = Vec::new();
+        // A write request every millisecond for five seconds.
+        for step in 0..5_000u64 {
+            let at = t0 + Duration::from_millis(step);
+            if budget.take(at) {
+                writes.push(Duration::from_millis(step));
+            }
+        }
+        // The cap holds over the whole flood: at most ten writes per second.
+        assert!(writes.len() <= 5 * WRITE_RATE_LIMIT as usize);
+        // ... and the budget does not starve the monitor either: the writes still go out.
+        assert!(writes.len() >= 4 * WRITE_RATE_LIMIT as usize);
+        // No one-second window holds more than WRITE_RATE_LIMIT writes. The window is half
+        // open, so two writes exactly one second apart are not in the same window.
+        for &start in &writes {
+            let end = start + Duration::from_secs(1);
+            let count = writes.iter().filter(|&&w| w >= start && w < end).count();
+            assert!(
+                count <= WRITE_RATE_LIMIT as usize,
+                "{count} writes in the second starting at {start:?}"
+            );
+        }
+    }
+
+    /// The protocol table of the module header, one row per line.
+    #[test]
+    fn the_command_table_is_parsed_as_documented() {
+        let cases: [(&str, Command); 13] = [
+            ("list", Command::List),
+            ("list extra", Command::Error),
+            ("get 0", Command::Get(0)),
+            ("get abc", Command::Error),
+            ("get", Command::Error),
+            ("get 0 1", Command::Error),
+            ("getall", Command::GetAll),
+            ("set 0 50", Command::Set(0, 50)),
+            ("set 0 abc", Command::Dropped),
+            ("set 0", Command::Error),
+            ("setall 50", Command::SetAll(50)),
+            ("setall abc", Command::Dropped),
+            ("setall 50 60", Command::Error),
+        ];
+        for (line, expected) in cases {
+            assert_eq!(parse_command(line), expected, "line: {line:?}");
+        }
+    }
+
+    /// Only the first three words of a line are read, so a trailing word is ignored — as it
+    /// has always been.
+    #[test]
+    fn a_trailing_word_is_ignored() {
+        assert_eq!(parse_command("set 0 50 60"), Command::Set(0, 50));
+    }
+
+    /// `set` and `setall` never produce a reply, not even an `err`.
+    #[test]
+    fn writes_never_get_a_reply() {
+        for line in ["set 0 50", "set 0 abc", "setall 50", "setall abc"] {
+            assert!(!parse_command(line).replies(), "line: {line:?}");
+        }
+    }
+
+    /// Everything that is not a write answers: the reads with their result, the rest with `err`.
+    #[test]
+    fn reads_and_errors_get_a_reply() {
+        for line in [
+            "list",
+            "get 0",
+            "getall",
+            "list extra",
+            "get abc",
+            "get",
+            "get 0 1",
+            "set 0",
+            "setall 50 60",
+            "",
+            "nonsense",
+        ] {
+            assert!(parse_command(line).replies(), "line: {line:?}");
+        }
+    }
+
+    #[test]
+    fn the_target_all_reaches_every_monitor() {
+        let monitors = vec![
+            ("key0".to_string(), "A".to_string()),
+            ("key1".to_string(), "B".to_string()),
+        ];
+        assert_eq!(select_indices(&Target::All, &monitors), vec![0, 1]);
+    }
+
+    #[test]
+    fn a_matching_key_reaches_that_monitor() {
+        let monitors = vec![
+            ("key0".to_string(), "A".to_string()),
+            ("key1".to_string(), "B".to_string()),
+        ];
+        let target = Target::Monitor {
+            key: "key1".to_string(),
+            name: "B".to_string(),
+        };
+        assert_eq!(select_indices(&target, &monitors), vec![1]);
+    }
+
+    #[test]
+    fn the_key_wins_over_the_name() {
+        // Two monitors share the name; the key still picks exactly one of them.
+        let monitors = vec![
+            ("key0".to_string(), "Same".to_string()),
+            ("key1".to_string(), "Same".to_string()),
+        ];
+        let target = Target::Monitor {
+            key: "key1".to_string(),
+            name: "Same".to_string(),
+        };
+        assert_eq!(select_indices(&target, &monitors), vec![1]);
+    }
+
+    #[test]
+    fn the_name_is_the_fallback_when_the_key_is_gone() {
+        let monitors = vec![
+            ("key0".to_string(), "A".to_string()),
+            ("key1".to_string(), "B".to_string()),
+        ];
+        // The display layout changed and the key is gone, but exactly one monitor has the name.
+        let target = Target::Monitor {
+            key: "gone".to_string(),
+            name: "B".to_string(),
+        };
+        assert_eq!(select_indices(&target, &monitors), vec![1]);
+    }
+
+    #[test]
+    fn an_ambiguous_name_reaches_nothing() {
+        let monitors = vec![
+            ("key0".to_string(), "Same".to_string()),
+            ("key1".to_string(), "Same".to_string()),
+        ];
+        // Two monitors with that name: better no monitor than the wrong one.
+        let target = Target::Monitor {
+            key: "gone".to_string(),
+            name: "Same".to_string(),
+        };
+        assert!(select_indices(&target, &monitors).is_empty());
     }
 }

@@ -61,8 +61,7 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Tests
-        # No tests yet (the audit's P1-01 adds the first ones); the step is
-        # here so they are run from the day they exist.
+        # The unit tests live in the crates they belong to; this is where they run.
         run: cargo test --workspace --all-targets
 
   build:
