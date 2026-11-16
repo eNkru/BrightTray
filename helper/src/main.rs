@@ -1,4 +1,4 @@
-use brighttray::{ddc, inject, probe, server, slider};
+use brighttray::{ddc, inject, osver, probe, server, slider};
 
 use std::process::ExitCode;
 
@@ -100,7 +100,17 @@ fn main() -> ExitCode {
     if args.first().map(String::as_str) == Some("serve") {
         // The helper is the long-lived process, so it is also what keeps the hook present
         // across ShellHost restarts. Set BRIGHTTRAY_NO_HOOK=1 to disable that.
-        if std::env::var_os("BRIGHTTRAY_NO_HOOK").is_none() {
+        if !osver::quick_settings_supported() {
+            // Quick Settings is not hosted by ShellHost on this build, so there is nothing the
+            // hook could attach to. The pipe server still runs: a brightness control without
+            // the tile is more useful than a server that refuses to start.
+            eprintln!(
+                "hook watcher: Windows build {} is not supported (needs {}+, Windows 11 24H2); \
+                 serving the pipe without the Quick Settings hook",
+                osver::build(),
+                osver::MIN_QUICK_SETTINGS_BUILD
+            );
+        } else if std::env::var_os("BRIGHTTRAY_NO_HOOK").is_none() {
             match inject::default_dll_path() {
                 Ok(dll) => {
                     inject::watch_and_inject(dll, |event| eprintln!("hook watcher: {event}"))
