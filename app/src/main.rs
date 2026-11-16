@@ -11,6 +11,7 @@ mod instance;
 
 use brighttray::ddc;
 use brighttray::inject::{self, WatchEvent};
+use brighttray::osver;
 use brighttray::server::{Server, Target};
 use serde_json::json;
 use tao::dpi::LogicalSize;
@@ -139,6 +140,11 @@ impl App {
             "hook": hook,
             "error": self.error,
             "autostart": autostart::is_enabled(),
+            "os": {
+                "supported": osver::quick_settings_supported(),
+                "build": osver::build(),
+                "min": osver::MIN_QUICK_SETTINGS_BUILD,
+            },
         });
         let _ = self
             .webview
@@ -188,6 +194,12 @@ impl App {
 
     fn apply(&mut self, key: &str) {
         self.error = None;
+        // Older Windows has no ShellHost-hosted Quick Settings to hook, so applying would only
+        // start a server nothing talks to. The page explains why; nothing is touched or saved.
+        if !osver::quick_settings_supported() {
+            self.push_state();
+            return;
+        }
         let Some(monitor) = self.monitors.iter().find(|m| m.key == key).cloned() else {
             self.error = Some(
                 tr(
@@ -385,7 +397,10 @@ fn main() {
     let Some(_primary) = instance::acquire() else {
         return;
     };
-    let started_by_logon = std::env::args().any(|a| a == autostart::FLAG);
+    // On an unsupported Windows build there is nothing to resume silently: open the window
+    // even on a logon start, so the user sees why the slider is missing.
+    let started_by_logon =
+        std::env::args().any(|a| a == autostart::FLAG) && osver::quick_settings_supported();
     autostart::refresh_path();
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
