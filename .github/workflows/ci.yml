@@ -7,9 +7,10 @@
 #   * `check`  — the gate: formatting, lints and tests for the whole workspace.
 #                This is what would have caught the helper crate not compiling.
 #   * `build`  — the release binaries: BrightTray.exe (the hook DLL is embedded
-#                in it), brighttray-helper.exe and their checksums. They are
-#                attached to the run as an artifact, and to a GitHub Release
-#                when the run was triggered by a v* tag.
+#                in it), brighttray-helper.exe with the hook DLL next to it
+#                (the CLI's `serve` and `inject` look for it there), and
+#                SHA256SUMS.txt. They are attached to the run as an artifact,
+#                and to a GitHub Release when the run was triggered by a v* tag.
 name: CI
 
 on:
@@ -84,8 +85,13 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         run: |
+          # The version comes from the manifest, not from a regular expression over the
+          # file: `cargo metadata` is the only source that cannot pick up a dependency's
+          # version by accident.
           $tag = $env:GITHUB_REF_NAME
-          $version = (Select-String -Path app/Cargo.toml -Pattern '^version = "(.+)"$').Matches[0].Groups[1].Value
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
+            Where-Object { $_.name -eq 'brighttray-app' } |
+            Select-Object -ExpandProperty version
           if ("v$version" -ne $tag) {
             Write-Error "the tag $tag does not match the version $version in app/Cargo.toml - bump the version before tagging"
             exit 1
@@ -104,22 +110,41 @@ jobs:
           "RUSTFLAGS=$flags" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Build
-        run: cargo build --release --workspace
+        run: |
+          # The workspace build produces all three binaries: the app (whose build.rs
+          # builds the hook and embeds it), the helper CLI, and the hook DLL itself,
+          # which the CLI's `serve` and `inject` expect next to their own executable.
+          cargo build --release --workspace
+          # A failing cargo is not a PowerShell error, so the step would carry on and
+          # report success. Check the exit code ourselves.
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Collect the binaries
         id: collect
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item target\release\BrightTray.exe dist\
-          Copy-Item target\release\brighttray-helper.exe dist\
-          # sha256sum format: the hash, two spaces, the file name.
-          $sums = Get-ChildItem dist\*.exe | ForEach-Object {
-            "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 -Path $_.FullName).Hash.ToLower(), $_.Name
+          foreach ($file in @(
+              'target\release\BrightTray.exe',
+              'target\release\brighttray-helper.exe',
+              'target\release\brighttray_hook.dll')) {
+            if (-not (Test-Path $file)) {
+              Write-Error "$file was not built - the release would be incomplete"
+              exit 1
+            }
+            Copy-Item $file dist\
           }
+          # sha256sum format: the hash, two spaces, the file name.
+          $sums = Get-ChildItem dist\* -File |
+            Where-Object { $_.Name -ne 'SHA256SUMS.txt' } |
+            ForEach-Object {
+              "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 -Path $_.FullName).Hash.ToLower(), $_.Name
+            }
           $sums | Out-File -FilePath dist\SHA256SUMS.txt -Encoding ascii
           Get-Content dist\SHA256SUMS.txt
-          $version = (Select-String -Path app/Cargo.toml -Pattern '^version = "(.+)"$').Matches[0].Groups[1].Value
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
+            Where-Object { $_.name -eq 'brighttray-app' } |
+            Select-Object -ExpandProperty version
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Upload the binaries to the run
@@ -140,7 +165,18 @@ jobs:
           # the assets of the existing release instead.
           gh release view $env:TAG --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $env:TAG dist\BrightTray.exe dist\brighttray-helper.exe dist\SHA256SUMS.txt --repo $env:GITHUB_REPOSITORY --clobber
+            gh release upload $env:TAG dist\BrightTray.exe dist\brighttray-helper.exe dist\brighttray_hook.dll dist\SHA256SUMS.txt --repo $env:GITHUB_REPOSITORY --clobber
           } else {
-            gh release create $env:TAG dist\BrightTray.exe dist\brighttray-helper.exe dist\SHA256SUMS.txt --repo $env:GITHUB_REPOSITORY --title "BrightTray $env:TAG" --generate-notes
+            $notes = @(
+              "BrightTray $env:TAG",
+              "",
+              "- **BrightTray.exe** — the app. One file is the whole install: the hook DLL is embedded in it and written to `%APPDATA%\BrightTray\` at runtime.",
+              "- **brighttray-helper.exe** — the command line tool (`probe`, `list`, `set`, `serve`). Keep it in the same folder as `brighttray_hook.dll`: `serve` and `inject` look for the DLL next to the executable.",
+              "- **brighttray_hook.dll** — the hook the helper injects into ShellHost.",
+              "- **SHA256SUMS.txt** — the checksums of the three files above.",
+              "",
+              "Verify with `sha256sum -c SHA256SUMS.txt` (or `Get-FileHash` on Windows)."
+            )
+            $notes | Set-Content -Path notes.md -Encoding utf8
+            gh release create $env:TAG dist\BrightTray.exe dist\brighttray-helper.exe dist\brighttray_hook.dll dist\SHA256SUMS.txt --repo $env:GITHUB_REPOSITORY --title "BrightTray $env:TAG" --notes-file notes.md
           }
