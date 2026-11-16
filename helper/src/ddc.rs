@@ -30,6 +30,27 @@ const VERIFY_RESENDS: u32 = 2;
 /// `MONITORINFOF_PRIMARY`.
 const PRIMARY_FLAG: u32 = 1;
 
+/// The native VCP value for `percent` of a monitor whose brightness range ends at `max`.
+///
+/// The value is rounded to the nearest one the monitor can show, and `percent` is clamped to
+/// 100, so a caller that asks for 120 gets the top of the range instead of an overflow. A
+/// monitor that reports no range at all has no value to scale to, and the answer is 0.
+fn scale_percent(percent: u32, max: u32) -> u32 {
+    (percent.min(100) * max + 50) / 100
+}
+
+/// The percentage a raw brightness value corresponds to, rounded to the nearest percent.
+///
+/// The answer never exceeds 100, so a monitor that reports more than its own maximum reads as
+/// full brightness. A monitor that reports no range at all has no percentage to report, and the
+/// answer is 0 rather than a division by zero.
+fn percent(current: u32, max: u32) -> u32 {
+    if max == 0 {
+        return 0;
+    }
+    ((current * 100 + max / 2) / max).min(100)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Brightness {
     pub current: u32,
@@ -37,8 +58,9 @@ pub struct Brightness {
 }
 
 impl Brightness {
+    /// The brightness as a percentage of the monitor's own range.
     pub fn percent(&self) -> u32 {
-        ((self.current * 100 + self.max / 2) / self.max).min(100)
+        percent(self.current, self.max)
     }
 }
 
@@ -134,7 +156,7 @@ impl Monitor {
             Some(max) => max,
             None => self.brightness()?.max,
         };
-        Some((percent.min(100) * max + 50) / 100)
+        Some(scale_percent(percent, max))
     }
 
     /// Sends one brightness write without reading it back. True when the command went out.
@@ -335,4 +357,81 @@ pub fn enumerate() -> Vec<Monitor> {
         );
     }
     state.monitors
+}
+
+#[cfg(test)]
+mod tests {
+    //! The scaling arithmetic: what a percentage means in the monitor's own units. Every
+    //! brightness write and every read-back comparison goes through these two numbers, and
+    //! neither of them needs a monitor — only the range it works on.
+
+    use super::{percent, scale_percent};
+
+    #[test]
+    fn a_percentage_scales_to_the_monitors_own_range() {
+        // A range of 100 is the percentage itself.
+        assert_eq!(scale_percent(50, 100), 50);
+        assert_eq!(scale_percent(0, 100), 0);
+        assert_eq!(scale_percent(100, 100), 100);
+        // A range of 255 (the usual VCP range) is scaled, not taken as is.
+        assert_eq!(scale_percent(100, 255), 255);
+        assert_eq!(scale_percent(0, 255), 0);
+    }
+
+    #[test]
+    fn the_scaled_value_is_rounded_to_the_nearest_one() {
+        // 50 % of 255 is 127.5, which rounds up.
+        assert_eq!(scale_percent(50, 255), 128);
+        // 1 % of 255 is 2.55, which rounds up.
+        assert_eq!(scale_percent(1, 255), 3);
+        // 10 % of 255 is 25.5, which rounds up.
+        assert_eq!(scale_percent(10, 255), 26);
+    }
+
+    #[test]
+    fn a_scaled_percentage_above_one_hundred_is_clamped() {
+        // A caller that asks for 120 gets the top of the range, not an overflow.
+        assert_eq!(scale_percent(120, 255), 255);
+        assert_eq!(scale_percent(120, 100), 100);
+    }
+
+    #[test]
+    fn a_monitor_without_a_range_scales_to_nothing() {
+        // No range, no value to scale to — and no division by zero.
+        assert_eq!(scale_percent(50, 0), 0);
+    }
+
+    #[test]
+    fn a_raw_value_scales_back_to_a_percentage() {
+        assert_eq!(percent(50, 100), 50);
+        assert_eq!(percent(0, 100), 0);
+        assert_eq!(percent(100, 100), 100);
+        // The value a write of 50 % produces on a 255 range reads back as 50 %.
+        assert_eq!(percent(scale_percent(50, 255), 255), 50);
+    }
+
+    #[test]
+    fn the_percentage_is_rounded_to_the_nearest_one() {
+        // 2 of 255 is 0.78 %, which rounds up to 1.
+        assert_eq!(percent(2, 255), 1);
+        // 1 of 255 is 0.39 %, which rounds down to 0.
+        assert_eq!(percent(1, 255), 0);
+        // 128 of 255 is 50.2 %, which rounds down to 50.
+        assert_eq!(percent(128, 255), 50);
+        // 129 of 255 is 50.6 %, which rounds up to 51.
+        assert_eq!(percent(129, 255), 51);
+    }
+
+    #[test]
+    fn a_raw_value_above_one_hundred_is_clamped() {
+        // A monitor that reports more than its own maximum reads as full brightness.
+        assert_eq!(percent(150, 100), 100);
+        assert_eq!(percent(255, 255), 100);
+    }
+
+    #[test]
+    fn a_monitor_without_a_range_has_no_percentage() {
+        // No range, no percentage — and no division by zero.
+        assert_eq!(percent(50, 0), 0);
+    }
 }
