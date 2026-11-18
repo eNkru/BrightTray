@@ -4,16 +4,20 @@
 #![windows_subsystem = "windows"]
 
 mod autostart;
+mod brightness_keys;
 mod config;
 mod hookdll;
 mod i18n;
 mod instance;
 
+use brighttray::client;
 use brighttray::ddc;
 use brighttray::inject::{self, WatchEvent};
 use brighttray::osver;
 use brighttray::server::{Server, Target};
 use serde_json::json;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use tao::dpi::LogicalSize;
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
@@ -86,6 +90,11 @@ struct App {
     scanning: bool,
     /// Started on the first apply; lives until the process exits.
     server: Option<Server>,
+    /// Started on the first apply; the keyboard's brightness keys are forwarded while a monitor
+    /// is applied. See [`brightness_keys`].
+    keys: Option<brightness_keys::KeyWatcher>,
+    /// False until a DDC/CI monitor is applied: the keys then do nothing at all.
+    keys_enabled: Arc<AtomicBool>,
     applied: Option<String>,
     hook: Hook,
     watcher_started: bool,
@@ -194,6 +203,9 @@ impl App {
 
     fn apply(&mut self, key: &str) {
         self.error = None;
+        // Applying is the only thing that can turn the keys off again: every early return below
+        // leaves the app without a display to drive, so nothing may write on a key press.
+        self.keys_enabled.store(false, Ordering::Relaxed);
         // Older Windows has no ShellHost-hosted Quick Settings to hook, so applying would only
         // start a server nothing talks to. The page explains why; nothing is touched or saved.
         if !osver::quick_settings_supported() {
@@ -273,7 +285,55 @@ impl App {
         self.config.monitor_key = Some(monitor.key);
         self.config.monitor_name = Some(monitor.name);
         self.config.save();
+        self.enable_brightness_keys();
         self.push_state();
+    }
+
+    /// Turns the keyboard's brightness keys into the same `setall` the slider sends.
+    ///
+    /// Windows' own handling of those keys stops at the OSD on a desktop — there is no display
+    /// it can dim itself, so nothing moves the monitor (measured: no setting-item call, no
+    /// power-setting write, no DDC write). Raw input sees the HID report anyway, and the
+    /// helper's worker thread — not this app — stays the only DDC/CI writer.
+    ///
+    /// Best effort: a registration failure is reported on the page once and the Quick Settings
+    /// path keeps working. There is no console in a `windows_subsystem` binary, so the page is
+    /// the only place a failure can be seen (see the app's quality guidelines).
+    fn enable_brightness_keys(&mut self) {
+        self.keys_enabled.store(true, Ordering::Relaxed);
+        if self.keys.is_some() {
+            return;
+        }
+        let enabled = Arc::clone(&self.keys_enabled);
+        // Presses are handled one at a time: a read plus a write takes long enough that a held
+        // key would otherwise stack requests faster than the monitor can take them.
+        let busy = Arc::new(Mutex::new(()));
+        match brightness_keys::start(move |direction| {
+            if !enabled.load(Ordering::Relaxed) {
+                return;
+            }
+            let Ok(_one_at_a_time) = busy.lock() else {
+                return;
+            };
+            // Ask the helper what the monitor reads now: the slider, the OSD or the monitor's
+            // own knob may have moved it since the last press.
+            let Some(current) = client::get_all() else {
+                return;
+            };
+            client::set_all(brightness_keys::next_brightness(current, direction));
+        }) {
+            Ok(watcher) => self.keys = Some(watcher),
+            // The keys are a convenience, not the product: say so once and carry on.
+            Err(e) => {
+                self.error = Some(format!(
+                    "{}{e}",
+                    tr(
+                        "键盘亮度键不可用：",
+                        "The brightness keys on your keyboard are unavailable: "
+                    )
+                ))
+            }
+        }
     }
 
     fn show(&mut self) {
@@ -487,6 +547,8 @@ fn main() {
         monitors: Vec::new(),
         scanning: false,
         server: None,
+        keys: None,
+        keys_enabled: Arc::new(AtomicBool::new(false)),
         applied: None,
         hook: Hook::Idle,
         watcher_started: false,

@@ -29,6 +29,7 @@
 
 - **原生** — 就是 Windows 自己的亮度条，不是悬浮窗或托盘弹窗
 - **双向同步** — 在显示器 OSD 上改了亮度，滑块会跟着变
+- **键盘亮度键可用** — 应用显示器之后，键盘上的亮度键直接调节显示器
 - **安全** — 不写死任何偏移；每次打补丁前都先校验，不符就放弃
 - **轻量** — 无需管理员权限，不改动系统文件，常驻托盘
 
@@ -104,6 +105,19 @@ flowchart LR
 先运行 `brighttray-helper list`，确认显示器能读到亮度；读不到时请在显示器 OSD 里开启 DDC/CI。然后查看 `%TEMP%\brighttray-hook.log`，其中应有 `IQuickAction hook installed`。
 
 BrightTray 不会自行重启 Windows 的 shell。如果亮度条仍然不出现，可能是 shell 在 hook 就位之前就把"没有亮度"缓存下来了 —— 在托盘菜单里选 **重启 ShellHost**，让它重新开始。命令行下用 `brighttray-helper inject --early --force-restart` 效果相同。
+
+</details>
+
+<details>
+<summary>按键盘亮度键会弹出 Windows 的亮度提示，但亮度没变</summary>
+
+<br>
+
+只有外接显示器的台式机上，Windows 找不到自己能调暗的屏幕，亮度键的处理就停在屏幕提示这一步：既不会走到快速设置，也不会发出任何 DDC/CI 命令。
+
+BrightTray 自己监听这些按键（Raw Input，不用 hook，也不需要管理员权限）。用过 **应用** 之后，每按一次按键，目标显示器亮度变化 10 点。Windows 的屏幕提示仍会出现，并显示它自己的数值，可能和显示器实际亮度不一致 —— BrightTray 改的是显示器，不是 Windows 记的那个数。
+
+按键没反应时，先确认窗口里有显示器处于已应用状态，并确认没有另一个 BrightTray（例如 `brighttray-helper serve`）占着管道。
 
 </details>
 
