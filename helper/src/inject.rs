@@ -537,9 +537,13 @@ mod tests {
         let dir = system_directory().expect("GetSystemDirectoryW");
         assert!(dir.is_absolute(), "{} is not absolute", dir.display());
         assert!(dir.is_dir(), "{} is not a directory", dir.display());
-        assert_eq!(
-            dir.file_name().and_then(|name| name.to_str()),
-            Some("System32")
+        // `GetSystemDirectoryW` keeps whatever casing the volume recorded; the CI runner
+        // answers `system32`, a desktop answers `System32`. Compare without case.
+        let name = dir.file_name().and_then(|name| name.to_str());
+        assert!(
+            name.is_some_and(|name| name.eq_ignore_ascii_case("System32")),
+            "{} is not the system directory",
+            dir.display()
         );
         assert!(dir.join(SHELLHOST).ends_with(SHELLHOST));
     }
