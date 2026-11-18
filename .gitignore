@@ -1,6 +1,9 @@
 target/
 target-dev/
 
+# IDE workspace files
+.idea/
+
 # AI assistant tooling & Trellis workflow files — kept locally, not committed
 .trellis/
 .agents/
