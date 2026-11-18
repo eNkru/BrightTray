@@ -29,6 +29,7 @@ Desktop PCs have no brightness slider in Quick Settings. BrightTray brings back 
 
 - **Native** — the real Windows slider, not an overlay or a tray popup
 - **Two-way** — changes made on the monitor's OSD flow back to the slider
+- **Keys work too** — the brightness keys on your keyboard move the monitor, once a display is applied
 - **Safe** — no hard-coded offsets; every patch is verified first, or skipped
 - **Light** — no admin rights, no system files touched, lives in the tray
 
@@ -104,6 +105,19 @@ One command per line, local connections only. Only the user who started BrightTr
 Run `brighttray-helper list` to confirm the monitor reports a brightness; if it doesn't, enable DDC/CI in the monitor's OSD. Then check `%TEMP%\brighttray-hook.log` for `IQuickAction hook installed`.
 
 BrightTray never restarts Windows' shell on its own. If the slider still does not show up, the shell may have cached "no brightness" before the hook was in place — pick **Restart ShellHost** in the tray menu to give it a fresh start. From the command line, `brighttray-helper inject --early --force-restart` does the same thing.
+
+</details>
+
+<details>
+<summary>The brightness keys on my keyboard show the Windows OSD but change nothing</summary>
+
+<br>
+
+On a desktop with only external monitors Windows has no display it can dim itself, so the brightness keys stop at the on-screen display: they never reach Quick Settings and never issue a DDC/CI command.
+
+BrightTray listens for those keys directly (raw input, no hook, no elevation) and moves the applied display by 10 points per press, once **Apply** has been used. The Windows OSD still appears and keeps its own number, which can differ from the monitor — BrightTray changes the monitor, not Windows' idea of it.
+
+If the keys do nothing, check that a display shows as applied in the window, and that another BrightTray (for example `brighttray-helper serve`) is not holding the pipe.
 
 </details>
 
