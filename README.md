@@ -50,6 +50,8 @@ Run `target\release\BrightTray.exe`, pick a display, click **Apply**, then press
 
 `BrightTray.exe` is a single self-contained file — copy it anywhere.
 
+Prebuilt releases publish a `SHA256SUMS.txt` next to the binaries. [docs/reproducible-builds.md](docs/reproducible-builds.md) has the one-line check for verifying a download, the steps to rebuild a release, and what a matching (and a non-matching) hash actually proves.
+
 ## How it works
 
 ```mermaid
