@@ -9,6 +9,7 @@ mod config;
 mod hookdll;
 mod i18n;
 mod instance;
+mod uninstall;
 mod webview2;
 
 use brighttray::client;
@@ -110,7 +111,13 @@ struct App {
     reveal_pending: bool,
     show_id: MenuId,
     restart_id: MenuId,
+    uninstall_id: MenuId,
     quit_id: MenuId,
+    /// Set once a confirmed uninstall has removed the files. tao buffers proxy events raised
+    /// while this handler runs and dispatches them afterwards, so a resume-driven apply or a
+    /// page `apply` could otherwise re-create `config.ini` and the hook DLL after the success
+    /// dialog said they were gone.
+    uninstalled: bool,
 }
 
 impl App {
@@ -518,11 +525,13 @@ fn main() {
         None,
     );
     let quit_item = MenuItem::new(tr("退出", "Quit"), true, None);
+    let uninstall_item = MenuItem::new(tr("卸载 BrightTray…", "Uninstall BrightTray…"), true, None);
     let _ = menu.append_items(&[
         &show_item,
         &PredefinedMenuItem::separator(),
         &restart_item,
         &PredefinedMenuItem::separator(),
+        &uninstall_item,
         &quit_item,
     ]);
     let mut tray_builder = TrayIconBuilder::new()
@@ -567,6 +576,8 @@ fn main() {
         reveal_pending: !started_by_logon,
         show_id: show_item.id().clone(),
         restart_id: restart_item.id().clone(),
+        uninstall_id: uninstall_item.id().clone(),
+        uninstalled: false,
         quit_id: quit_item.id().clone(),
     };
     // Scan right away instead of waiting for the page: a logon start never shows the window.
@@ -596,6 +607,9 @@ fn main() {
                 }
                 _ => {}
             },
+            // After a confirmed uninstall nothing may run: the removals already happened, and a
+            // buffered event would write the files back.
+            Event::UserEvent(_) if app.uninstalled => {}
             Event::UserEvent(event) => match event {
                 UserEvent::Ipc(message) => {
                     if !app.on_ipc(&message) {
@@ -654,6 +668,16 @@ fn main() {
                         app.show();
                     } else if event.id == app.restart_id {
                         app.restart_shellhost();
+                    } else if event.id == app.uninstall_id {
+                        // The dialogs are modal by nature and the removals are a handful of
+                        // file deletes, so this runs on the loop thread; there is nothing to
+                        // keep responsive while a modal dialog is up. On anything but
+                        // `Cancelled` the removals are done, so exit and let the user delete
+                        // the executable.
+                        if !matches!(uninstall::offer(), uninstall::Outcome::Cancelled) {
+                            app.uninstalled = true;
+                            *control_flow = ControlFlow::Exit;
+                        }
                     }
                 }
                 UserEvent::RestartShellHost(result) => {

@@ -3,6 +3,9 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+/// The settings file's name inside `%APPDATA%\BrightTray`; the uninstall removes it by name.
+pub(crate) const FILE: &str = "config.ini";
+
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     /// The monitor the user last applied, as [`brighttray::ddc::Monitor::key`] and name.
@@ -11,7 +14,7 @@ pub struct Config {
 }
 
 fn path() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|dir| PathBuf::from(dir).join("BrightTray").join("config.ini"))
+    std::env::var_os("APPDATA").map(|dir| PathBuf::from(dir).join("BrightTray").join(FILE))
 }
 
 impl Config {
