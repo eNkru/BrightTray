@@ -61,6 +61,10 @@ flowchart LR
 
 A hook inside `ShellHost.exe` makes the hidden brightness tile applicable and forwards its value over a named pipe; the helper writes it to the monitor. The full reverse-engineering notes are in [docs/quick-settings-hook-research.md](docs/quick-settings-hook-research.md) (Chinese).
 
+The window drives **one** display at a time: the Quick Settings slider moves the display you applied, and that choice is remembered in `%APPDATA%\BrightTray\config.ini`. To address several monitors, use the CLI instead — `brighttray-helper set <index> <0-100>` for one monitor by index, `brighttray-helper serve` for every DDC/CI monitor at once (and its pipe accepts per-index `get` / `set`, plus `getall` / `setall`).
+
+The two cannot run together: both own the pipe `\\.\pipe\BrightTray`, so only one process can serve. When the CLI already holds it, the window says "Another BrightTray (for example `brighttray-helper serve`) is already running. Close it first." — close the other process and press Apply again.
+
 ## CLI
 
 <details>

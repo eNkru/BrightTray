@@ -169,6 +169,43 @@ budget refills — the cap wins over read freshness.
 The app switches the target at runtime with `Server::set_target()`, which
 sends `Cmd::SetTarget` to the worker; the change applies to the next command.
 
+### The GUI is single-monitor by design
+
+This is a decision, not an unfinished feature (P2-03). The alternatives were
+considered and rejected, because a fan-out GUI has no answer to these:
+
+1. **What the Quick Settings slider means.** Windows shows one slider. If Apply
+   meant "every monitor", that slider becomes a single control writing N
+   displays, and the window's radio group would describe something the slider
+   does not do.
+2. **Where the choice lives.** `config.ini` stores one `monitor_key` /
+   `monitor_name`. Only a logon start re-applies it automatically; a manual start
+   shows it as the saved selection and waits for Apply. A set of displays needs a
+   schema change and a restore policy for a display that is unplugged, and the
+   window's `applied` state would stop meaning one thing.
+3. **The write budget.** Rate limiting is per monitor
+   (see [the write cadence](#coalescing-and-the-write-cadence)) and protects each
+   monitor's EEPROM. Per *monitor* a fanned-out action costs the same as a
+   single-target one; what grows is the number of monitors written — N EEPROMs
+   where the GUI writes one, so total writes and aggregate wear scale with the
+   number of displays, and the per-monitor cap cannot claw that back.
+
+So `apply()` builds `Target::Monitor` and `serve()` builds `Target::All`. The CLI
+is the supported multi-monitor path: `set <index> <0-100>` names a monitor
+directly, and the pipe accepts per-index `get`/`set` plus `getall`/`setall`. The
+GUI does not expose per-index addressing — it has one target, chosen with Apply.
+
+The two models are exclusive because both claim `\\.\pipe\BrightTray`:
+whatever starts second fails with `AddrInUse`, and the GUI turns that into
+"Another BrightTray (for example `brighttray-helper serve`) is already running.
+Close it first." Renaming the pipe would not help either: the rate limit buckets
+are per monitor inside one server, so two servers would each own a private
+bucket and the same monitor could receive twice `WRITE_RATE_LIMIT`. The mutex
+stays.
+
+A multi-target GUI is therefore a UI-first change: change the window's model,
+the `config.ini` schema and what `apply:` does, and update this record second.
+
 ## The Windows slider is mirrored
 
 While serving, the server subscribes to the Windows brightness slider

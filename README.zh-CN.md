@@ -60,6 +60,10 @@ flowchart LR
 
 注入 `ShellHost.exe` 的 hook 让被隐藏的亮度磁贴生效，并把数值经命名管道转发出去，再由 helper 写入显示器。完整的逆向分析见 [docs/quick-settings-hook-research.md](docs/quick-settings-hook-research.md)。
 
+窗口一次只驱动**一台**显示器：快速设置里的亮度条调的是你点过“应用”的那台，这个选择记录在 `%APPDATA%\BrightTray\config.ini` 里。想按显示器逐一操作，请改用命令行：`brighttray-helper set <index> <0-100>` 按索引设置某一台，`brighttray-helper serve` 同时驱动全部支持 DDC/CI 的显示器（它的管道还接受按索引的 `get` / `set`，以及 `getall` / `setall`）。
+
+两者不能同时运行：它们都占用管道 `\\.\pipe\BrightTray`，同一时间只能有一个进程在服务。被命令行占着时，窗口会提示“另一个 BrightTray（例如 `brighttray-helper serve`）正在运行，请先关闭它。” —— 关掉另一个进程后再点“应用”。
+
 ## 命令行
 
 <details>
