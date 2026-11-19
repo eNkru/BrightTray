@@ -13,7 +13,8 @@ use brighttray::inject::HOOK_DLL;
 
 const BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/brighttray_hook.dll"));
 /// A previous version's DLL that was still loaded in ShellHost when it had to be replaced.
-const STALE_PREFIX: &str = "brighttray_hook.old-";
+/// The uninstall removes these by the same prefix.
+pub(crate) const STALE_PREFIX: &str = "brighttray_hook.old-";
 
 fn dir() -> Result<PathBuf, String> {
     std::env::var_os("APPDATA")

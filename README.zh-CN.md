@@ -157,11 +157,23 @@ BrightTray 通过 `CreateRemoteThread` 把 DLL 加载进 `ShellHost.exe`，部�
 </details>
 
 <details>
-<summary>如何卸载</summary>
+<summary>如何卸载？</summary>
 
 <br>
 
-关闭 **开机自启动**，在托盘菜单中选择 **退出**，然后注销或重启 ShellHost。最后删除 `%APPDATA%\BrightTray`，里面是设置和释放出的 hook。
+在托盘菜单里选 **卸载 BrightTray…** 并确认。它会删除 **开机自启动** 项、`%APPDATA%\BrightTray\config.ini` 和释放出的 hook DLL（包括升级时留下的 `brighttray_hook.old-*.dll` 副本），然后退出，剩下的 `BrightTray.exe` 由你手动删除。
+
+如果 hook DLL 删不掉，通常是因为 `ShellHost` 还加载着它，而 Windows 不允许删除正在使用的文件；提示框会写明是哪个文件。注销或重启 Windows 卸载 hook，然后删除提示框给出的文件夹（也就是 `BrightTray.exe` 所在的文件夹）。
+
+已经删掉 `BrightTray.exe` 了？下面这几行 PowerShell 做的是同一件事，不需要任何 BrightTray 文件 —— 把最后一行换成可执行文件原来的位置：
+
+```powershell
+Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name BrightTray -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force "$env:APPDATA\BrightTray"
+Remove-Item -Force 'C:\path\to\BrightTray.exe'
+```
+
+如果 `Remove-Item` 提示文件正在使用，说明 hook 仍被加载：注销或重启 Windows 后再执行同一行。`%TEMP%\brighttray-hook.log` 只是诊断日志，留着或手动删掉都可以。
 
 </details>
 

@@ -27,6 +27,16 @@ Rules:
   is not `Send`; it stays on the loop thread.
 - A worker thread never touches the `Window` or the `WebView` — it only sends
   an event.
+- **One deliberate exception: the uninstall.** `uninstall::offer()` runs on the
+  loop thread because it is a modal dialog followed by at most four
+  `remove_file` calls and one registry delete — microseconds of I/O that cannot
+  be observed while a modal box is up, and moving them to a worker would mean a
+  second event round-trip between "the user agreed" and "the files are gone".
+  Once it returns anything but `Cancelled`, `app.uninstalled` is set and every
+  later `UserEvent` is dropped: tao buffers events raised during the handler and
+  dispatches them afterwards, and a queued resume-apply would otherwise write
+  `config.ini` and the hook DLL back after the success dialog said they were
+  gone.
 
 ## Window behaviour
 

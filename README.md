@@ -162,7 +162,19 @@ BrightTray loads a DLL into `ShellHost.exe` with `CreateRemoteThread`, which som
 
 <br>
 
-Turn off **Start with Windows**, choose **Exit** from the tray menu, then sign out or restart ShellHost. Then delete `%APPDATA%\BrightTray`, which holds the settings and the extracted hook.
+Pick **Uninstall BrightTray…** in the tray menu and confirm. It removes the **Start with Windows** entry, `%APPDATA%\BrightTray\config.ini` and the extracted hook DLL — including `brighttray_hook.old-*.dll` copies an upgrade left behind — then exits so you can delete `BrightTray.exe` itself.
+
+The hook DLL is the one thing that can survive: while `ShellHost` has it loaded, Windows refuses to delete it, and the report names the file. Sign out or restart Windows to unload the hook, then delete the folder the report names (the one holding `BrightTray.exe`).
+
+Already deleted `BrightTray.exe`? These PowerShell lines do the same thing and need no BrightTray file — replace the last path with wherever the executable was:
+
+```powershell
+Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name BrightTray -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force "$env:APPDATA\BrightTray"
+Remove-Item -Force 'C:\path\to\BrightTray.exe'
+```
+
+If a `Remove-Item` reports that a file is in use, the hook is still loaded: sign out or restart Windows, then run the same line again. `%TEMP%\brighttray-hook.log` is only a diagnostic log and can stay or be deleted by hand.
 
 </details>
 
