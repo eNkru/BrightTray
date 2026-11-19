@@ -152,6 +152,36 @@ old one loaded, the old file is renamed to `brighttray_hook.old-<pid>.dll`
 (a loaded DLL can be renamed) and the new one is written. Stale copies are
 deleted on the next run.
 
+### The exact up-to-date check is deliberate
+
+The Windows CI artifact at `87943b4` (run `44490756053`) contains a **242 KiB
+(247,808-byte)** hook DLL. The older published v0.1.2 release DLL is 230 KiB
+(235,520 bytes); neither is ~1 MB. `hookdll::extract()` runs inside `apply()`,
+including automatic saved-display resume, behind `if !self.watcher_started`.
+Successful watcher startup prevents further extractions; failures can be
+retried on later applies. The exact byte comparison deliberately rejects a
+content-different file, even if its size matches. It does not unload an old
+hook already running in ShellHost or prevent later filesystem changes.
+
+P1-07's local Linux microbenchmark used a synthetic 247,808-byte file and
+buffer with a warm page cache, not Windows DLL-loading measurements. In
+7 batches × 500 iterations (minimum batch time per iteration), the current-file
+check measured **10.6 µs** versus **10.3 µs** with a size-first check: a current
+file necessarily has the expected size, so it still must be read and compared.
+For a different-size file, size-first measured **0.20 µs** versus **6.6 µs**
+for the existing check; this only helps when the extracted size differs.
+A separate 7 × 200-iteration benchmark measured FNV-1a alone at **187 µs**,
+and file-read-plus-FNV at **195 µs** (about 18× the full exact-check cost).
+These results do not establish a Windows startup bottleneck, so retain the
+existing comparison rather than add an unproven optimization.
+
+Re-evaluate on the target Windows workload if extraction becomes frequent or
+the DLL grows materially. A persisted hash needs a trustworthy invalidation
+contract; hashing the file on every check does not avoid reading it. A version
+resource or release signature also needs a build-identity contract: a version
+field or signer alone does not prove byte equality, and signature verification
+may itself read the entire file.
+
 ## The page
 
 - The page is plain HTML/CSS/JS in one file, no build step, no framework.
