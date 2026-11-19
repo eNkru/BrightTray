@@ -186,6 +186,16 @@ fn store_user_percent(percent: u32) {
     }
 }
 
+/// The version this DLL was built from, from `hook/Cargo.toml` via `hook/build.rs`.
+pub const VERSION: &str = env!("BRIGHTTRAY_HOOK_VERSION");
+/// The build that produced this DLL: `BRIGHTTRAY_BUILD_ID` (CI sets the commit), or `dev`.
+pub const BUILD_ID: &str = env!("BRIGHTTRAY_HOOK_BUILD_ID");
+
+/// `version=0.1.2 build=4f2c1ab…`, for the log line and for bug reports.
+pub fn identity() -> String {
+    format!("version={VERSION} build={BUILD_ID}")
+}
+
 /// `brighttray-hook.log` is capped at this size. When it reaches the cap, the file is renamed
 /// to `brighttray-hook.log.1`, so one previous generation survives the rotation.
 const LOG_CAP: u64 = 1 << 20;
@@ -1453,7 +1463,7 @@ pub extern "system" fn DllMain(
         // loader lock has been released.
         std::thread::spawn(|| {
             std::thread::sleep(std::time::Duration::from_millis(300));
-            log("brighttray_hook attached");
+            log(format!("brighttray_hook attached {}", identity()));
             install();
         });
     }
@@ -1466,7 +1476,18 @@ mod tests {
     //! catches a table shifted by one slot: every pointer would still be inside the module.
     //! The log rotation is tested here too, against a per-test directory under `%TEMP%`.
 
-    use super::{append_line, check_distinct, rotate_if_needed, LOG_CAP};
+    use super::{
+        append_line, check_distinct, identity, rotate_if_needed, BUILD_ID, LOG_CAP, VERSION,
+    };
+
+    #[test]
+    fn the_identity_comes_from_the_manifest() {
+        // A hand-edited constant would fail here: the build script writes both from
+        // `Cargo.toml` and `BRIGHTTRAY_BUILD_ID`.
+        assert_eq!(VERSION, env!("CARGO_PKG_VERSION"));
+        assert!(!BUILD_ID.is_empty());
+        assert!(identity().contains(BUILD_ID));
+    }
 
     #[test]
     fn a_duplicate_function_is_refused() {

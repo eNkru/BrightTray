@@ -21,7 +21,7 @@
 
 | Forbidden | Why |
 |-----------|-----|
-| `unwrap()`, `expect()`, `panic!` anywhere in the crate | The crate currently has **zero** of them; a panic would unwind into ShellHost |
+| `unwrap()`, `expect()`, `panic!` anywhere in the injected code | `hook/src/lib.rs` currently has **zero** of them; a panic would unwind into ShellHost. `hook/build.rs` is a build script and may fail the build loudly - see "The DLL carries its identity" |
 | Patching a slot whose pointer is outside the module | A Windows update would turn it into a jump into nowhere |
 | Caching the brightness instance by address | A freed object's address can be reused by another tile |
 | Doing DDC/CI in the DLL | Two DDC/CI speakers break the command gap; the helper owns the monitor handles |
@@ -30,6 +30,28 @@
 | A hard-coded RVA or offset | A system update moves it; the exported-function route survives |
 | Removing a validation check to make an install succeed | Better a disabled hook than a crashed shell |
 | `panic = "abort"` in the release profile | The hook relies on `catch_unwind` to survive a panic. With `panic = "abort"` there is no unwind, so a panic in a vtable hook would abort **ShellHost** instead of returning `E_FAIL` |
+
+## The DLL carries its identity
+
+`hook/build.rs` writes a `VERSIONINFO` resource into `OUT_DIR` and compiles it with
+`embed-resource` (the same crate `app/build.rs` uses for the icon), so the DLL reports
+`FileVersion` = `Cargo.toml`'s version padded to four numbers, and a `BuildId` string of
+`BRIGHTTRAY_BUILD_ID` (CI sets the commit; local builds say `dev`).
+
+The contract:
+
+- **A change to hook behaviour or state bumps `hook/Cargo.toml`'s `version`.** Two
+  content-different builds must not share a version. CI fails when the shipped DLL's
+  `FileVersion` does not match the manifest, and when its `BuildId` is not the commit on a CI
+  build, so a stale or hand-made DLL cannot pass as a release.
+- **The resource is diagnostic identity, not a content proof.** It answers "which build is
+  this?" for the log, Explorer's property sheet and a bug report. It does **not** replace the
+  exact byte comparison in `app/src/hookdll.rs`: P1-07 measured that comparison at ~10 µs and
+  rejected a content hash as ~18× slower, so parsing `.rsrc` to save those microseconds would
+  trade a measured cost for a new misparse risk inside `ShellHost`.
+- The `no unwrap/expect/panic!` rule above covers injected code. `hook/build.rs` is a build
+  script: there, failing the build loudly is the correct response to a missing version, and it
+  cannot run inside `ShellHost`.
 
 ## Testing
 
@@ -85,7 +107,8 @@ Then the live check:
 
 ## Review checklist
 
-- [ ] No `unwrap` / `expect` / `panic!` added.
+- [ ] No `unwrap` / `expect` / `panic!` added to injected code (`hook/src/lib.rs` outside
+  `#[cfg(test)]`); `hook/build.rs` is exempt, for the reason above.
 - [ ] Every new vtable hook has a `catch_unwind` wrapper and an original-call
       fallback.
 - [ ] Every new slot is validated with `in_module`, the table passes

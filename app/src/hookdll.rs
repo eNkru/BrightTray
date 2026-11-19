@@ -3,6 +3,11 @@
 //! ShellHost loads the hook with `LoadLibraryW`, which needs a file on disk, so the embedded
 //! copy is written to `%APPDATA%\BrightTray\brighttray_hook.dll` before injecting.
 //!
+//! The DLL carries a `VERSIONINFO` identity (`hook/build.rs`), but this comparison does not read
+//! it: an exact byte compare costs ~10 µs on a path that already probes DDC/CI, and parsing the
+//! PE resource section to avoid that would add a misparse risk inside `ShellHost` for no
+//! measurable gain (audit P1-07). The identity is for logs and release checks.
+//!
 //! It sits next to the settings rather than in `%LOCALAPPDATA%`: on the development machine
 //! ShellHost refused to load the very same file from `%LOCALAPPDATA%\BrightTray`, where it
 //! inherits an app-container ACE from the parent folder, and loaded it from here.
