@@ -1,6 +1,7 @@
 //! Persistent settings in `%APPDATA%\BrightTray\config.ini` (plain `key=value` lines).
 
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Default)]
 pub struct Config {
@@ -33,8 +34,32 @@ impl Config {
             self.monitor_key.as_deref().unwrap_or(""),
             self.monitor_name.as_deref().unwrap_or(""),
         );
-        let _ = std::fs::write(path, text);
+        // Best effort, exactly as before: nothing the user can act on, and the setting is
+        // re-entered on demand.
+        let _ = write_atomically(&path, text.as_bytes());
     }
+}
+
+/// Writes `text` to `path` so a crash can never leave a partial file behind: the bytes go to
+/// a temporary file next to it, are flushed, and only then replace the old file with a
+/// rename — one operation that either swaps in the new content or keeps the old one.
+fn write_atomically(path: &Path, text: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("ini.tmp");
+    let result = (|| {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(text)?;
+        file.sync_all()?;
+        // Windows refuses to rename a file that is still open (ERROR_ACCESS_DENIED), so the
+        // handle has to be closed before the swap.
+        drop(file);
+        std::fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        // A half-written temporary file is not a settings file; leaving it behind would only
+        // accumulate. Removing it is best effort too — it may be a directory a test put there.
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
 
 /// Parses the settings file: one `key=value` per line.
@@ -64,7 +89,8 @@ mod tests {
     //! The settings file format: one `key=value` per line, and an empty value leaves the key
     //! unset. The file is written by `save` and read by `load`, so the two have to agree.
 
-    use super::parse;
+    use super::{parse, write_atomically};
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn a_key_value_pair_is_parsed() {
@@ -120,5 +146,104 @@ mod tests {
         let config = parse("");
         assert!(config.monitor_key.is_none());
         assert!(config.monitor_name.is_none());
+    }
+
+    /// A directory of its own under `%TEMP%`, named with the process id and the test name so
+    /// parallel tests never share one.
+    fn temp_dir(test: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("brighttray-config-{}-{test}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_write_leaves_the_whole_content_and_no_tmp_file() {
+        let dir = temp_dir("round-trip");
+        let path = dir.join("config.ini");
+
+        write_atomically(&path, b"monitor_key=abc\nmonitor_name=Monitor\n").unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "monitor_key=abc\nmonitor_name=Monitor\n"
+        );
+        assert!(!dir.join("config.ini.tmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_second_write_replaces_the_file() {
+        let dir = temp_dir("replace");
+        let path = dir.join("config.ini");
+        write_atomically(&path, b"monitor_key=old\nmonitor_name=Old\n").unwrap();
+
+        write_atomically(&path, b"monitor_key=new\nmonitor_name=New\n").unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "monitor_key=new\nmonitor_name=New\n"
+        );
+        assert!(!dir.join("config.ini.tmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_write_keeps_the_previous_file() {
+        let dir = temp_dir("failed-write");
+        let path = dir.join("config.ini");
+        std::fs::write(&path, b"monitor_key=old\n").unwrap();
+        // A directory at the temporary path makes `File::create` fail on every platform, which
+        // is how a save that cannot even start looks from the outside.
+        std::fs::create_dir(dir.join("config.ini.tmp")).unwrap();
+
+        assert!(write_atomically(&path, b"monitor_key=new\n").is_err());
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "monitor_key=old\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_rename_removes_the_temporary_file() {
+        let dir = temp_dir("failed-rename");
+        let path = dir.join("config.ini");
+        // A non-empty directory at the final path fails the rename rather than the write, which
+        // is how a destination locked by another process looks. The content is complete but
+        // unused, so it must not be left behind for the next `load()` to wonder about.
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("occupied"), b"junk").unwrap();
+
+        assert!(write_atomically(&path, b"monitor_key=new\n").is_err());
+
+        assert!(path.is_dir());
+        assert!(!dir.join("config.ini.tmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_leftover_tmp_from_a_crashed_run_is_overwritten() {
+        let dir = temp_dir("leftover-tmp");
+        let path = dir.join("config.ini");
+        // What a run killed between the write and the rename leaves behind.
+        std::fs::write(dir.join("config.ini.tmp"), b"junk").unwrap();
+
+        write_atomically(&path, b"monitor_key=new\n").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "monitor_key=new\n");
+        assert!(!dir.join("config.ini.tmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_tmp_file_is_config_ini_tmp_next_to_the_settings() {
+        // The checkpoint sits in `%APPDATA%\BrightTray` while a save is running and
+        // `a_failed_write_keeps_the_previous_file` depends on the name, so pin it here instead
+        // of leaving it implicit in the helper.
+        let path = Path::new("BrightTray").join("config.ini");
+        assert_eq!(
+            path.with_extension("ini.tmp"),
+            path.with_file_name("config.ini.tmp")
+        );
     }
 }
