@@ -8,7 +8,8 @@
 //!
 //! `getall` / `setall` are what the Quick Settings hook uses. Which monitors they reach is the
 //! server's [`Target`]: every monitor for the CLI, the one the user picked for the GUI.
-//! While serving, moves of the Windows brightness slider are mirrored to the target as well.
+//! While serving, moves of the Windows brightness slider are mirrored to the target as well,
+//! unless `BRIGHTTRAY_NO_MIRROR` is set (see [`slider::mirroring_enabled`]).
 //!
 //! Writes are paced rather than verified per step: a drag sends at most one write per monitor
 //! per [`WRITE_INTERVAL`], always carrying the newest value, and the read-back happens once
@@ -883,17 +884,22 @@ impl Server {
 
         // The first notification is only the slider's current position, delivered on
         // registration. Mirror actual moves only, so starting never changes a monitor by itself.
-        let slider_state = std::sync::Mutex::new((tx.clone(), None::<u32>));
-        let slider = slider::subscribe(move |p| {
-            let mut state = slider_state.lock().unwrap_or_else(|e| e.into_inner());
-            let (tx, last) = &mut *state;
-            if last.is_some_and(|l| l != p) {
-                let _ = tx.send(Cmd::SetAll(p));
-            }
-            *last = Some(p);
-        })
-        .map_err(|e| eprintln!("not following the Windows brightness slider: {e}"))
-        .ok();
+        // `BRIGHTTRAY_NO_MIRROR` skips the subscription altogether: no callback, no DDC/CI work.
+        let slider = if slider::mirroring_enabled() {
+            let slider_state = std::sync::Mutex::new((tx.clone(), None::<u32>));
+            slider::subscribe(move |p| {
+                let mut state = slider_state.lock().unwrap_or_else(|e| e.into_inner());
+                let (tx, last) = &mut *state;
+                if last.is_some_and(|l| l != p) {
+                    let _ = tx.send(Cmd::SetAll(p));
+                }
+                *last = Some(p);
+            })
+            .map_err(|e| eprintln!("not following the Windows brightness slider: {e}"))
+            .ok()
+        } else {
+            None
+        };
 
         // HANDLE is a raw pointer; move it across as an integer.
         let raw = first.0 as isize;

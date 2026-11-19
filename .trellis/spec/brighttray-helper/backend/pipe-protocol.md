@@ -183,6 +183,41 @@ if last.is_some_and(|l| l != p) {
 *last = Some(p);
 ```
 
+Two consequences, both worth knowing on a laptop:
+
+- The command is **`Cmd::SetAll`**: every monitor the current
+  [target](#the-target) covers. With `Target::All` (the CLI) that is every
+  DDC/CI-capable monitor; with `Target::Monitor` (the GUI, after Apply) it is
+  the one display the user applied. Neither is "whichever display the user was
+  dimming in Settings".
+- A DDC/CI brightness write is an **EEPROM write**, and a drag keeps producing
+  them. The worker paces them ([coalescing](#coalescing)) to at most one write
+  per `WRITE_INTERVAL` (300 ms), so a forty-step drag is a handful of writes,
+  not forty - but every one of them lands on a display the user did not mean to
+  change.
+
+So on a laptop, where Windows owns the internal panel and shows its brightness
+slider, every drag of that slider also moves the external monitors. The escape
+hatch is `BRIGHTTRAY_NO_MIRROR`: with it set to `1`, `true`, `yes` or `on`
+(trimmed, case-insensitive), `Server::start` does not subscribe at all — no
+power-manager callback runs and no DDC/CI work is queued. Any other value, the
+empty string and an unset variable mean the mirroring is on, which is the
+**default**. The switch sits inside `Server::start`, so the GUI and
+`brighttray-helper serve` honour it identically; set the variable in the
+environment BrightTray is started from (`set BRIGHTTRAY_NO_MIRROR=1` before
+launching it, or `setx` for a persistent setting).
+
+The switch covers the power-manager path only. The Quick Settings slider
+BrightTray installs is the hook's (`setall` through the pipe, an independent
+client) and keeps working, as do the app's brightness keys. That is the point:
+the escape hatch is for a slider the user did not aim at BrightTray. Note that
+`brighttray-helper watch` still subscribes - it prints values and writes
+nothing, so it is a diagnostic, not a second mirroring path.
+
+`BRIGHTTRAY_NO_MIRROR` is value-parsed, unlike `BRIGHTTRAY_NO_HOOK` which is
+presence-based: `BRIGHTTRAY_NO_MIRROR=0` keeps the mirroring on purpose, so a
+value copied from a script cannot silently turn the feature off.
+
 ## Validation and error matrix
 
 | Input line | What the server does | Reply |

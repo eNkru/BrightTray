@@ -7,6 +7,12 @@
 //!
 //! Note: Windows only publishes this (and only shows the slider) when it owns a display it can
 //! dim itself, e.g. a laptop panel. On a desktop with only external monitors nothing arrives.
+//!
+//! That asymmetry is why the mirroring can surprise a laptop user: the panel it dims and the
+//! external monitors it does not are both on screen, and a drag keeps writing the targets -
+//! coalesced by the worker to at most one write per `WRITE_INTERVAL`, and every one of those
+//! writes is an EEPROM write on the monitor - for a change the user made to the panel only.
+//! `BRIGHTTRAY_NO_MIRROR` turns the mirroring off; see [`mirroring_enabled`].
 
 use std::ffi::c_void;
 
@@ -17,6 +23,32 @@ use windows::Win32::System::Power::{
 };
 use windows::Win32::System::SystemServices::GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS;
 use windows::Win32::UI::WindowsAndMessaging::{DEVICE_NOTIFY_CALLBACK, PBT_POWERSETTINGCHANGE};
+
+/// Set it to keep Windows brightness moves off the monitors. Any value that is not one of the
+/// words [`mirroring_disabled`] accepts leaves the mirroring on.
+const NO_MIRROR_VAR: &str = "BRIGHTTRAY_NO_MIRROR";
+
+/// Whether a value of `BRIGHTTRAY_NO_MIRROR` means "do not mirror".
+///
+/// Only `1`, `true`, `yes` and `on` (trimmed, case-insensitive) turn the mirroring off. `None`
+/// (the variable is unset or not valid Unicode), the empty string, an explicit off-word and any
+/// unrecognised value all mean "mirror", i.e. today's behaviour: a typo must not silently
+/// disable a feature the user did not ask to disable.
+fn mirroring_disabled(value: Option<&str>) -> bool {
+    matches!(
+        value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
+        Some("1" | "true" | "yes" | "on")
+    )
+}
+
+/// Whether the server should follow the Windows brightness slider at all.
+///
+/// `BRIGHTTRAY_NO_MIRROR=1` (`true`, `yes`, `on`) skips the subscription entirely, so no
+/// power-manager callback runs and no DDC/CI work is queued for a slider the system owns. With
+/// the variable unset, empty or unrecognised, the mirroring is on.
+pub fn mirroring_enabled() -> bool {
+    !mirroring_disabled(std::env::var(NO_MIRROR_VAR).ok().as_deref())
+}
 
 type Sink = Box<dyn Fn(u32) + Send + Sync>;
 
@@ -79,4 +111,59 @@ pub fn subscribe(
         _params: params,
         _sink: sink,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    //! The `BRIGHTTRAY_NO_MIRROR` table: the pure decision, without an environment or a slider.
+
+    use super::mirroring_disabled;
+
+    #[test]
+    fn explicit_on_words_disable_the_mirroring() {
+        for value in ["1", "true", "yes", "on", "TRUE", "Yes", "ON"] {
+            assert!(
+                mirroring_disabled(Some(value)),
+                "{value:?} should disable the mirroring"
+            );
+        }
+    }
+
+    #[test]
+    fn surrounding_whitespace_is_ignored() {
+        for value in [" 1 ", "\ttrue\n", "  on  ", "\r\nyes"] {
+            assert!(
+                mirroring_disabled(Some(value)),
+                "{value:?} should disable the mirroring"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_off_words_keep_the_mirroring() {
+        for value in ["0", "false", "no", "off", "FALSE", "Off"] {
+            assert!(
+                !mirroring_disabled(Some(value)),
+                "{value:?} should keep the mirroring"
+            );
+        }
+    }
+
+    #[test]
+    fn unset_empty_and_junk_keep_the_mirroring() {
+        // Today's behaviour is the default: only an explicit word turns it off.
+        for value in [
+            None,
+            Some(""),
+            Some("   "),
+            Some("nope"),
+            Some("2"),
+            Some("disable"),
+        ] {
+            assert!(
+                !mirroring_disabled(value),
+                "{value:?} should keep the mirroring"
+            );
+        }
+    }
 }

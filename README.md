@@ -134,6 +134,17 @@ If the keys do nothing, check that a display shows as applied in the window, and
 </details>
 
 <details>
+<summary>On my laptop, changing the brightness also changes the external monitor</summary>
+
+<br>
+
+A laptop has a display Windows dims itself, so the system keeps its own brightness paths alive: **Settings > Display**, the brightness keys before BrightTray claims them, and whatever else publishes the `GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS` power setting. BrightTray follows that setting and forwards the moves to the monitors, so a change you meant for the laptop panel also moves the external display. The writes are paced (at most one per 300 ms, not one per slider step), but each of them is a DDC/CI write, which is an EEPROM write on the monitor. With **Apply** the GUI's target narrows to the display you applied — still not the panel you were dimming.
+
+Set `BRIGHTTRAY_NO_MIRROR=1` in the environment BrightTray starts from (`true`, `yes` and `on` work too, in any case) and the helper stops following the Windows brightness setting: no callback, no writes. The rest keeps working — the Quick Settings slider BrightTray installs and the brightness keys are separate paths. Remove the variable, or set it to `0`, to get the mirroring back. The default is unchanged: unset, it mirrors as it always has.
+
+</details>
+
+<details>
 <summary>My antivirus flags it</summary>
 
 <br>

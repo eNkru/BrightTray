@@ -133,6 +133,17 @@ BrightTray 自己监听这些按键（Raw Input，不用 hook，也不需要管�
 </details>
 
 <details>
+<summary>笔记本上调亮度，外接显示器也跟着变</summary>
+
+<br>
+
+笔记本有一块 Windows 自己能调暗的屏幕，所以系统保留了它自己的亮度路径：**设置 > 显示**、BrightTray 接管之前的亮度键，以及其他会发布 `GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS` 电源设置的地方。BrightTray 跟随这个设置，把这些变化转发给显示器，所以本来只想改内屏的亮度，外接显示器也会跟着动。写入是节流的（最多每 300 毫秒一次，而不是每一步一次），但每一次都是 DDC/CI 写入，对显示器来说就是一次 EEPROM 写入。用过 **应用** 之后，图形界面的目标会缩小到选中的那台显示器 —— 仍然不是你在调的那块内屏。
+
+在 BrightTray 启动时的环境里设置 `BRIGHTTRAY_NO_MIRROR=1`（`true`、`yes`、`on` 也可以，大小写不限），helper 就不再跟随 Windows 的亮度设置：没有回调，也没有写入。其余功能照旧 —— 快速设置里 BrightTray 安装的亮度条和亮度键走的是另外的路径。删掉这个变量，或把它设为 `0`，就恢复跟随。默认行为没有变化：不设置时，和以前一样跟随。
+
+</details>
+
+<details>
 <summary>杀毒软件报警</summary>
 
 <br>
