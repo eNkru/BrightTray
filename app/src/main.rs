@@ -9,6 +9,7 @@ mod config;
 mod hookdll;
 mod i18n;
 mod instance;
+mod webview2;
 
 use brighttray::client;
 use brighttray::ddc;
@@ -462,6 +463,13 @@ fn main() {
     let started_by_logon =
         std::env::args().any(|a| a == autostart::FLAG) && osver::quick_settings_supported();
     autostart::refresh_path();
+    // WebView2 is an implicit dependency and there is no console to report it to. Nothing is
+    // running yet — no window, no tray, no worker threads — so exiting here is the whole
+    // cleanup, and it beats the silent `expect` inside `wry`'s build below.
+    if !webview2::installed() {
+        webview2::show_missing_dialog();
+        std::process::exit(1);
+    }
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();

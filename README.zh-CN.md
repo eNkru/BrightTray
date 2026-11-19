@@ -35,7 +35,9 @@
 
 ## 快速开始
 
-需要 Windows 11 24H2 或更新版本，以及开启了 DDC/CI 的显示器。
+需要 Windows 11 24H2 或更新版本，以及开启了 DDC/CI 的显示器。还需要
+[Microsoft Edge WebView2 Evergreen Runtime](https://go.microsoft.com/fwlink/p/?LinkId=2124703)
+（Windows 11 默认自带）；如果缺少它，BrightTray 会提示原因并退出，而不是静默失败。
 
 ```powershell
 git clone https://github.com/cestbon0309/BrightTray.git
@@ -105,6 +107,15 @@ flowchart LR
 先运行 `brighttray-helper list`，确认显示器能读到亮度；读不到时请在显示器 OSD 里开启 DDC/CI。然后查看 `%TEMP%\brighttray-hook.log`，其中应有 `IQuickAction hook installed`。日志上限为 1 MiB，写满后上一份日志会保存在 `%TEMP%\brighttray-hook.log.1`，也请一并查看。
 
 BrightTray 不会自行重启 Windows 的 shell。如果亮度条仍然不出现，可能是 shell 在 hook 就位之前就把"没有亮度"缓存下来了 —— 在托盘菜单里选 **重启 ShellHost**，让它重新开始。命令行下用 `brighttray-helper inject --early --force-restart` 效果相同。
+
+</details>
+
+<details>
+<summary>BrightTray 提示缺少 WebView2，但本机已经安装</summary>
+
+<br>
+
+BrightTray 读取的是微软文档所述的 EdgeUpdate 注册信息，正常情况下不会误报。可能出错的只有两种情况：**固定版本**运行时（按应用放置的 `Microsoft.WebView2.FixedVersionRuntime.*` 目录，它不写任何注册信息），以及被策略锁定或重定向的注册表。设置 `BRIGHTTRAY_FAKE_WEBVIEW2=1` 可以跳过检查、交给 WebView2 自己判断；`BRIGHTTRAY_FAKE_WEBVIEW2=0` 则强制显示这条提示，测试用的就是它。
 
 </details>
 
