@@ -139,6 +139,13 @@ jobs:
           Write-Host "RUSTFLAGS=$flags"
           "RUSTFLAGS=$flags" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Stamp the hook DLL with this build
+        shell: pwsh
+        # The hook DLL's VERSIONINFO carries BRIGHTTRAY_BUILD_ID, so a shipped DLL names the
+        # commit that produced it. A local build without it says `build=dev`.
+        run: |
+          "BRIGHTTRAY_BUILD_ID=$env:GITHUB_SHA" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Build
         run: |
           # The workspace build produces all three binaries: the app (whose build.rs
@@ -176,6 +183,43 @@ jobs:
             Where-Object { $_.name -eq 'brighttray-app' } |
             Select-Object -ExpandProperty version
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: The hook DLL carries its identity
+        shell: pwsh
+        # The shipped artefact, not the source tree: a missing or stale VERSIONINFO is a release
+        # error, because the identity is what lets a log line or a bug report name the build.
+        run: |
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
+            Where-Object { $_.name -eq 'brighttray-hook' } |
+            Select-Object -ExpandProperty version
+          $dll = (Get-Item dist\brighttray_hook.dll).FullName
+          $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($dll)
+          # FileVersionRaw is the numeric fixed field, so the check does not depend on how the
+          # string field is formatted.
+          Write-Host "hook DLL FileVersion=$($info.FileVersion) raw=$($info.FileVersionRaw)"
+
+          if ("$($info.FileVersionRaw)" -ne "$version.0") {
+            Write-Error "dist\brighttray_hook.dll reports FileVersion $($info.FileVersionRaw), expected $version.0 - did hook/Cargo.toml change without a rebuild?"
+            exit 1
+          }
+
+          # The custom string field is what binds the DLL to a commit. Read it from the raw
+          # bytes as UTF-16 so the check does not depend on how PowerShell surfaces
+          # StringFileInfo properties.
+          $text = [System.Text.Encoding]::Unicode.GetString([System.IO.File]::ReadAllBytes($dll))
+          if (-not $text.Contains("BuildId")) {
+            Write-Error "dist\brighttray_hook.dll has no BuildId string - hook/build.rs did not embed its VERSIONINFO"
+            exit 1
+          }
+          if ([string]::IsNullOrWhiteSpace($env:GITHUB_SHA)) {
+            Write-Error "GITHUB_SHA is empty - the build id cannot be verified"
+            exit 1
+          }
+          if (-not $text.Contains($env:GITHUB_SHA)) {
+            Write-Error "dist\brighttray_hook.dll does not carry the build id $env:GITHUB_SHA - the build step did not stamp it"
+            exit 1
+          }
+          Write-Host "hook DLL carries version $version and build $env:GITHUB_SHA"
 
       - name: Upload the binaries to the run
         uses: actions/upload-artifact@v7

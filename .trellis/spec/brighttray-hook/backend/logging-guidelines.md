@@ -16,10 +16,14 @@ One line per event:
 Example:
 
 ```
-[1762910400 pid=8124] brighttray_hook attached
+[1762910400 pid=8124] brighttray_hook attached version=0.1.2 build=4f2c1ab…
 [1762910400 pid=8124] IQuickAction hook installed: build=26100 vtable=0x7FF6A1B40000 action=0x7FF6A1D2E118 slots=7,8,9,10,12,14,19,20,21,22
 [1762910402 pid=8124] QuickSetValue("Value")
 ```
+
+The `version=`/`build=` suffix comes from `hook/build.rs` (`CARGO_PKG_VERSION` and
+`BRIGHTTRAY_BUILD_ID`, the commit in CI, `dev` otherwise), so the first line of the log names
+the DLL that was injected. It is the only place that identity is visible at runtime.
 
 ## Logging must never be able to take down ShellHost
 
