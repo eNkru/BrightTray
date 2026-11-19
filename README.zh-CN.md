@@ -49,6 +49,8 @@ cargo build --release
 
 `BrightTray.exe` 是独立的单文件，可以拷贝到任意位置使用。
 
+预编译的 release 会在二进制旁边附上 `SHA256SUMS.txt`。[docs/reproducible-builds.md](docs/reproducible-builds.md) 里有一行命令可以校验下载，也有复现一次 release 构建的步骤，以及哈希一致（和不一致）到底能证明什么。
+
 ## 工作原理
 
 ```mermaid
