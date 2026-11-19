@@ -1,11 +1,16 @@
 # CI: check every build, and ship the Windows binaries.
 #
-# The whole workspace is Windows-only (`std::os::windows`, the `windows` crate),
-# so every job runs on a Windows runner.
+# The workspace itself is Windows-only (`std::os::windows`, the `windows` crate,
+# WebView2), so the jobs that compile something run on a Windows runner. The
+# supply-chain job is the exception: it only reads `Cargo.lock` and `deny.toml`.
 #
-# Two things come out of this workflow:
+# Three things come out of this workflow:
 #   * `check`  — the gate: formatting, lints and tests for the whole workspace.
 #                This is what would have caught the helper crate not compiling.
+#   * `supply-chain` — `cargo deny` over the committed lock file: RUSTSEC
+#                advisories, the license allowlist, duplicate/wildcard bans and
+#                the allowed sources, all read from `deny.toml`. It never builds
+#                the workspace, so it is the one job that runs on Linux.
 #   * `build`  — the release binaries: BrightTray.exe (the hook DLL is embedded
 #                in it), brighttray-helper.exe with the hook DLL next to it
 #                (the CLI's `serve` and `inject` look for it there), and
@@ -64,6 +69,32 @@ jobs:
       - name: Tests
         # The unit tests live in the crates they belong to; this is where they run.
         run: cargo test --workspace --all-targets
+
+  supply-chain:
+    name: Supply chain
+    # Deliberately not `needs: check`. A broken build and a dependency that just
+    # picked up an advisory are independent facts, and the second one should not
+    # wait for the first to be fixed before it is reported. This job only reads
+    # `Cargo.lock` and `deny.toml`, so it needs no Windows runner and no toolchain
+    # beyond the container's own.
+    #
+    # When it fails, the diagnostic names the advisory or the crate and license.
+    # Two answers are legitimate: upgrade the dependency, or add an ignore entry
+    # to `deny.toml` with a reason and an expiry. There is no third - relaxing an
+    # allowlist so the job goes green is how a supply-chain check stops meaning
+    # anything.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      # Pinned by commit, not by tag: this is the job that decides whether a
+      # dependency is acceptable, so the tool making the decision must not be able
+      # to change under it. v2.1.3 = 17aeb3c…; bump the SHA deliberately.
+      - name: cargo deny
+        uses: EmbarkStudios/cargo-deny-action@17aeb3c839e42274e2b8adf721c8c65edfdc74dd
+        with:
+          command: check
 
   build:
     name: Windows binaries

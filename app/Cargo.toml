@@ -2,6 +2,7 @@
 name = "brighttray-app"
 version = "0.1.2"
 edition = "2021"
+license.workspace = true
 build = "build.rs"
 
 [[bin]]
@@ -9,7 +10,7 @@ name = "BrightTray"
 path = "src/main.rs"
 
 [dependencies]
-brighttray-helper = { path = "../helper" }
+brighttray-helper = { path = "../helper", version = "0.1.2" }
 serde_json = "1"
 tao = "0.31"
 wry = "0.47"
