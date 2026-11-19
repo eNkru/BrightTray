@@ -35,7 +35,10 @@ Desktop PCs have no brightness slider in Quick Settings. BrightTray brings back 
 
 ## Quick start
 
-Requires Windows 11 24H2 or later and a monitor with DDC/CI enabled.
+Requires Windows 11 24H2 or later and a monitor with DDC/CI enabled. It also needs the
+[Microsoft Edge WebView2 Evergreen Runtime](https://go.microsoft.com/fwlink/p/?LinkId=2124703),
+which ships with Windows 11; if it is missing, BrightTray says so and exits instead of failing
+silently.
 
 ```powershell
 git clone https://github.com/cestbon0309/BrightTray.git
@@ -105,6 +108,15 @@ One command per line, local connections only. Only the user who started BrightTr
 Run `brighttray-helper list` to confirm the monitor reports a brightness; if it doesn't, enable DDC/CI in the monitor's OSD. Then check `%TEMP%\brighttray-hook.log` for `IQuickAction hook installed`. The log is capped at 1 MiB; once it fills up, the previous generation sits next to it as `%TEMP%\brighttray-hook.log.1`, so check that file too.
 
 BrightTray never restarts Windows' shell on its own. If the slider still does not show up, the shell may have cached "no brightness" before the hook was in place — pick **Restart ShellHost** in the tray menu to give it a fresh start. From the command line, `brighttray-helper inject --early --force-restart` does the same thing.
+
+</details>
+
+<details>
+<summary>BrightTray says WebView2 is missing, but it is installed</summary>
+
+<br>
+
+BrightTray reads the EdgeUpdate registration Microsoft documents for the runtime, so a false "missing" should not happen. The two cases it can get wrong are a **fixed-version** runtime (a per-application `Microsoft.WebView2.FixedVersionRuntime.*` folder, which writes no registration at all) and a locked-down or redirected registry. `BRIGHTTRAY_FAKE_WEBVIEW2=1` skips the check and lets WebView2 decide for itself; `BRIGHTTRAY_FAKE_WEBVIEW2=0` forces the message, which is how it is tested.
 
 </details>
 
