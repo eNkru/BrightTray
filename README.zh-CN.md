@@ -102,7 +102,7 @@ flowchart LR
 
 <br>
 
-先运行 `brighttray-helper list`，确认显示器能读到亮度；读不到时请在显示器 OSD 里开启 DDC/CI。然后查看 `%TEMP%\brighttray-hook.log`，其中应有 `IQuickAction hook installed`。
+先运行 `brighttray-helper list`，确认显示器能读到亮度；读不到时请在显示器 OSD 里开启 DDC/CI。然后查看 `%TEMP%\brighttray-hook.log`，其中应有 `IQuickAction hook installed`。日志上限为 1 MiB，写满后上一份日志会保存在 `%TEMP%\brighttray-hook.log.1`，也请一并查看。
 
 BrightTray 不会自行重启 Windows 的 shell。如果亮度条仍然不出现，可能是 shell 在 hook 就位之前就把"没有亮度"缓存下来了 —— 在托盘菜单里选 **重启 ShellHost**，让它重新开始。命令行下用 `brighttray-helper inject --early --force-restart` 效果相同。
 
