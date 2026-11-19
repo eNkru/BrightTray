@@ -102,7 +102,7 @@ One command per line, local connections only. Only the user who started BrightTr
 
 <br>
 
-Run `brighttray-helper list` to confirm the monitor reports a brightness; if it doesn't, enable DDC/CI in the monitor's OSD. Then check `%TEMP%\brighttray-hook.log` for `IQuickAction hook installed`.
+Run `brighttray-helper list` to confirm the monitor reports a brightness; if it doesn't, enable DDC/CI in the monitor's OSD. Then check `%TEMP%\brighttray-hook.log` for `IQuickAction hook installed`. The log is capped at 1 MiB; once it fills up, the previous generation sits next to it as `%TEMP%\brighttray-hook.log.1`, so check that file too.
 
 BrightTray never restarts Windows' shell on its own. If the slider still does not show up, the shell may have cached "no brightness" before the hook was in place — pick **Restart ShellHost** in the tray menu to give it a fresh start. From the command line, `brighttray-helper inject --early --force-restart` does the same thing.
 

@@ -186,12 +186,36 @@ fn store_user_percent(percent: u32) {
     }
 }
 
-/// Appends a line to `%TEMP%\brighttray-hook.log`. Best effort only: logging must never be
-/// able to take down ShellHost.
-fn log(message: impl AsRef<str>) {
+/// `brighttray-hook.log` is capped at this size. When it reaches the cap, the file is renamed
+/// to `brighttray-hook.log.1`, so one previous generation survives the rotation.
+const LOG_CAP: u64 = 1 << 20;
+
+/// Rotates `path` into its `.1` sibling once it has reached [`LOG_CAP`].
+///
+/// Best effort only, exactly like the write itself: every filesystem error is ignored, because
+/// the previous generation is a diagnostic nicety and never a reason to fail inside ShellHost.
+/// Nothing here reads the file - the size check is one `metadata()` call.
+fn rotate_if_needed(path: &std::path::Path) {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return;
+    };
+    if meta.len() < LOG_CAP {
+        return;
+    }
+    let previous = path.with_extension("log.1");
+    // Windows has no rename-over, so the old generation has to go first.
+    let _ = std::fs::remove_file(&previous);
+    let _ = std::fs::rename(path, &previous);
+}
+
+/// Appends one formatted line to `path`, rotating it into its `.1` sibling first when it has
+/// reached [`LOG_CAP`]. Best effort only: the size check, the rotation and the write all ignore
+/// their errors, because logging must never be able to take down ShellHost.
+fn append_line(path: &std::path::Path, secs: u64, message: &str) {
     use std::io::Write;
 
-    let path = std::env::temp_dir().join("brighttray-hook.log");
+    // Before the open, so a rotation can never split the line that is about to be written.
+    rotate_if_needed(path);
     let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -199,15 +223,21 @@ fn log(message: impl AsRef<str>) {
     else {
         return;
     };
+    let _ = writeln!(file, "[{secs} pid={}] {message}", std::process::id());
+}
+
+/// Appends a line to `%TEMP%\brighttray-hook.log`, rotating it into
+/// `%TEMP%\brighttray-hook.log.1` when it reaches [`LOG_CAP`]. Best effort only: logging must
+/// never be able to take down ShellHost.
+fn log(message: impl AsRef<str>) {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let _ = writeln!(
-        file,
-        "[{secs} pid={}] {}",
-        std::process::id(),
-        message.as_ref()
+    append_line(
+        &std::env::temp_dir().join("brighttray-hook.log"),
+        secs,
+        message.as_ref(),
     );
 }
 
@@ -1434,8 +1464,9 @@ pub extern "system" fn DllMain(
 mod tests {
     //! The slot table check that runs before anything is patched. It is the one guard that
     //! catches a table shifted by one slot: every pointer would still be inside the module.
+    //! The log rotation is tested here too, against a per-test directory under `%TEMP%`.
 
-    use super::check_distinct;
+    use super::{append_line, check_distinct, rotate_if_needed, LOG_CAP};
 
     #[test]
     fn a_duplicate_function_is_refused() {
@@ -1452,5 +1483,110 @@ mod tests {
     fn an_empty_or_single_slot_table_is_accepted() {
         assert!(check_distinct(&[]).is_ok());
         assert!(check_distinct(&[(6, 0x1000)]).is_ok());
+    }
+
+    /// A scratch directory of its own per test: `%TEMP%` is shared, and the tests run in
+    /// parallel.
+    fn scratch_dir(test_name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "brighttray-hook-log-test-{}-{test_name}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn rotation_empties_the_current_file_and_keeps_the_old_one() {
+        let dir = scratch_dir("rotation-empties-the-current-file");
+        let path = dir.join("brighttray-hook.log");
+        let previous = dir.join("brighttray-hook.log.1");
+        std::fs::write(&path, vec![b'x'; LOG_CAP as usize]).unwrap();
+
+        rotate_if_needed(&path);
+
+        assert!(
+            !path.exists(),
+            "the current file is renamed away, not truncated"
+        );
+        assert_eq!(std::fs::metadata(&previous).unwrap().len(), LOG_CAP);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rotation_leaves_a_small_file_alone() {
+        let dir = scratch_dir("rotation-leaves-a-small-file");
+        let path = dir.join("brighttray-hook.log");
+        std::fs::write(&path, b"kept\n").unwrap();
+
+        rotate_if_needed(&path);
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"kept\n");
+        assert!(!dir.join("brighttray-hook.log.1").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rotation_without_a_file_does_nothing() {
+        let dir = scratch_dir("rotation-without-a-file");
+        let path = dir.join("brighttray-hook.log");
+
+        rotate_if_needed(&path);
+
+        assert!(!path.exists());
+        assert!(!dir.join("brighttray-hook.log.1").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_second_rotation_replaces_the_previous_generation() {
+        let dir = scratch_dir("a-second-rotation");
+        let path = dir.join("brighttray-hook.log");
+        let previous = dir.join("brighttray-hook.log.1");
+
+        std::fs::write(&path, vec![b'a'; LOG_CAP as usize]).unwrap();
+        rotate_if_needed(&path);
+        std::fs::write(&path, vec![b'b'; LOG_CAP as usize]).unwrap();
+        rotate_if_needed(&path);
+
+        let kept = std::fs::read(&previous).unwrap();
+        assert_eq!(kept.len(), LOG_CAP as usize);
+        assert!(
+            kept.iter().all(|byte| *byte == b'b'),
+            "the newer batch wins"
+        );
+
+        // The next `log()` call recreates the current file; two files, never a `.2`.
+        std::fs::write(&path, b"next session\n").unwrap();
+        let mut names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["brighttray-hook.log", "brighttray-hook.log.1"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn appending_a_line_rotates_first() {
+        let dir = scratch_dir("appending-a-line-rotates-first");
+        let path = dir.join("brighttray-hook.log");
+        let previous = dir.join("brighttray-hook.log.1");
+        std::fs::write(&path, vec![b'x'; LOG_CAP as usize]).unwrap();
+
+        append_line(&path, 1_762_910_400, "after rotation");
+
+        assert_eq!(
+            std::fs::metadata(&previous).unwrap().len(),
+            LOG_CAP,
+            "the old generation carries the bytes the rotation moved aside"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            format!("[1762910400 pid={}] after rotation\n", std::process::id()),
+            "the current file holds exactly the one formatted line"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

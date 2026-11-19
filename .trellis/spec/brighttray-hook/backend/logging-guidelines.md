@@ -24,8 +24,11 @@ Example:
 ## Logging must never be able to take down ShellHost
 
 ```rust
-fn log(message: impl AsRef<str>) {
-    let path = std::env::temp_dir().join("brighttray-hook.log");
+fn append_line(path: &std::path::Path, secs: u64, message: &str) {
+    use std::io::Write;
+
+    // Before the open, so a rotation can never split the line that is about to be written.
+    rotate_if_needed(path);
     let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -33,13 +36,26 @@ fn log(message: impl AsRef<str>) {
     else {
         return;
     };
-    ...
+    let _ = writeln!(file, "[{secs} pid={}] {message}", std::process::id());
+}
+
+fn log(message: impl AsRef<str>) {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    append_line(
+        &std::env::temp_dir().join("brighttray-hook.log"),
+        secs,
+        message.as_ref(),
+    );
 }
 ```
 
-If the file cannot be opened, `log()` returns silently. There is no error
-path, no panic, no retry. The hook runs inside a system process; a logging
-failure must not become a shell failure.
+If the file cannot be opened, `append_line()` returns silently. There is no
+error path, no panic, no retry. The hook runs inside a system process; a
+logging failure must not become a shell failure. `rotate_if_needed()` obeys
+the same rule - see [The log is capped](#the-log-is-capped).
 
 ## De-duplicate the noisy events
 
@@ -86,12 +102,62 @@ The build number and the slot list are the other half: a Windows update that
 shifts a table shows up as a changed `build=` / `slots=` line, before any
 failure, so the log alone says whether the constants still match.
 
-## No size limit and no rotation
+## The log is capped
 
-The log is opened in append mode and never truncated or rotated. ShellHost
-restarts often (and the watcher re-injects on every restart), so the file
-grows for as long as the machine keeps running. There is no cleanup code
-anywhere.
+`brighttray-hook.log` is bounded: one current file plus one previous
+generation, so the hook's footprint in `%TEMP%` is at most two times the cap
+no matter how long the machine has been running. `LOG_CAP` in `lib.rs` is
+`1 << 20` (1 MiB); at the observed line rate that is thousands of sessions'
+worth of lines.
+
+`log()` checks the size before opening the file and rotates it when it reaches
+the cap:
+
+```rust
+fn rotate_if_needed(path: &std::path::Path) {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return;
+    };
+    if meta.len() < LOG_CAP {
+        return;
+    }
+    let previous = path.with_extension("log.1");
+    // Windows has no rename-over, so the old generation has to go first.
+    let _ = std::fs::remove_file(&previous);
+    let _ = std::fs::rename(path, &previous);
+}
+```
+
+What the code guarantees:
+
+- **One previous generation, not a set.** `brighttray-hook.log.1` is removed
+  before the rename, so a second rotation replaces it instead of producing
+  `.2`. There are never more than the two files.
+- **Rotation, not truncation.** The last lines before a ShellHost restart - the
+  identifier dump, the last brightness transition, a panic line - are exactly
+  what a diagnosis needs, so they move to `.1` instead of being dropped.
+  Truncating at the cap would throw them away on a schedule nobody can predict.
+- **Best effort, like the write.** Every filesystem error in the rotation path
+  is ignored (`let _ = ...`, or an early return from `let Ok(...) else`). A
+  read-only `%TEMP%`, a missing directory, a `.log.1` held open by an antivirus
+  scanner, or a `.log.1` the user deleted all degrade into "this rotation did
+  not happen". No `unwrap`, no `expect`, no `panic!`, no retry, no error line -
+  the same rule as the failed `open()` in the section above.
+- **A line is never split.** The size check and the rotation run at the top of
+  `log()`, before the `OpenOptions` call, so a rotation cannot land between the
+  `open()` and the `writeln!()` of one line.
+- **The check is one `metadata()`.** No reading the file, no scanning for
+  newlines. An in-memory byte counter would be cheaper but wrong: the hook is
+  re-injected on every ShellHost start, so a fresh instance cannot see what an
+  earlier one wrote.
+- **No lock.** Two shell processes can be alive at once, so both instances may
+  rotate concurrently, and an unlucky interleaving can lose one line or leave a
+  fragment at the boundary. That is acceptable for a diagnostic log nobody
+  parses programmatically; a shell-wide named mutex would buy no guarantee a
+  reader uses.
+- **The format does not change.** Rotation never writes a marker line and never
+  rewrites existing lines: `[<unix seconds> pid=<pid>] <message>` stays as it
+  is, and a reader of `brighttray-hook.log` sees the same thing as before.
 
 ## What is not logged
 

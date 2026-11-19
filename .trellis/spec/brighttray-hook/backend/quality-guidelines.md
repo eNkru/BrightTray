@@ -33,8 +33,16 @@
 
 ## Testing
 
-There is **no automated test suite** in this repository. The hook is verified
-manually on a Windows machine with a DDC/CI monitor — see below.
+The hook crate carries inline `#[cfg(test)]` unit tests in `hook/src/lib.rs`:
+`check_distinct` (the slot-table validation that runs before anything is
+patched) and the log-rotation tests (`rotate_if_needed` / `append_line`, cap,
+previous generation, missing file). They run under `cargo test --workspace
+--all-targets` on the Windows CI runner; they are Windows-only binaries and do
+not run on a Linux host.
+
+The hook itself is still verified manually on a Windows machine with a DDC/CI
+monitor — the unit tests do not load the DLL into ShellHost or touch a monitor.
+See below.
 
 ## Verification steps
 
