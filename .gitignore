@@ -4,8 +4,12 @@ target-dev/
 # IDE workspace files
 .idea/
 
-# AI assistant tooling & Trellis workflow files — kept locally, not committed
-.trellis/
+# AI assistant tooling & Trellis workflow files — kept locally, not committed.
+# The coding spec under .trellis/spec/ is the exception: it is a project contract
+# (module maps, pipe protocol, error handling) and belongs in the repository with
+# the code it describes. Tasks, journals, scripts and runtime state stay local.
+.trellis/*
+!.trellis/spec/
 .agents/
 .pi/
 AGENTS.md
