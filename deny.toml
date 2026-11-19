@@ -1,0 +1,116 @@
+# Supply-chain policy for the packages in `Cargo.lock`.
+#
+# `cargo deny check` runs in CI (see `.github/workflows/ci.yml`, job `Supply chain`). It reads
+# this file and the committed lock file; it does not build anything, so it runs on a cheap
+# Ubuntu runner even though the workspace is Windows-only.
+#
+# The point of keeping the policy in the repository is that a change to it is reviewable. A new
+# dependency under a license that is not listed here fails the job until someone deliberately
+# adds it, and an advisory that the maintainers decided to live with has a reason and an end
+# date attached to it.
+#
+# If the job is red: read the diagnostic, then either upgrade the dependency, or - if the
+# finding is a false positive or the fix has not landed upstream - add an ignore with a reason
+# and an expiry (see [advisories]).
+
+# Evaluate the graph for the platform the binaries actually ship on. `Cargo.lock` also pins
+# packages that only exist for other platforms (GTK, Cocoa, Android) because `wry`/`tao` declare
+# them; they are never compiled here, never distributed, and their advisories and licenses must
+# not fail this job. Change this list if the project ever ships a non-Windows build.
+[graph]
+targets = [{ triple = "x86_64-pc-windows-msvc" }]
+
+[advisories]
+# RUSTSEC advisories against the packages above. The ignore list is empty today: the tree is
+# clean.
+#
+# To silence one, use the table form. The key is `expiry`, not `expires`:
+#
+#   ignore = [
+#     { id = "RUSTSEC-2024-0001", reason = "the vulnerable API is never called; fixed upstream in 2.x, tracked in <issue>", expiry = "2027-01-31" },
+#   ]
+#
+# cargo-deny itself only rejects *unknown* keys there (`expires` fails as
+# `error[unexpected-keys]`); `reason` and `expiry` are technically optional. This project's rule
+# is that both are required anyway, and that rule is enforced in review, because an ignore
+# without an expiry never expires and an ignore without a reason cannot be re-evaluated. An
+# ignore whose `expiry` has passed is an error again, which is the whole point of the date.
+ignore = []
+
+# `unmaintained` covers the transitive tree, not only the crates the workspace names directly.
+# The default (`workspace`) would only fail for a direct dependency, which is close to useless
+# here: every crate in this project's build is reached through `wry`, `tao` or `windows`. A
+# package the maintainers walked away from is a supply-chain fact worth failing over.
+unmaintained = "all"
+
+# `yanked` stays at `warn`. A yank is not a vulnerability - the pin in `Cargo.lock` keeps
+# working, and the version is usually re-released under a new number - so failing every open PR
+# the moment an upstream maintainer yanks a transitive dependency would block work unrelated to
+# the crate. The warning is in the log for the next time someone touches that dependency.
+yanked = "warn"
+
+[bans]
+# Duplicate versions are allowed. The lock file has several (syn 1.x/2.x/3.x, the
+# windows-sys/windows-targets family) because `wry` and `tao` depend on older releases than the
+# workspace does. Collapsing them is the upstream crates' job, not something this project can
+# pin away.
+multiple-versions = "allow"
+# No wildcard versions from dependencies. The one wildcard that existed was the workspace's own
+# `brighttray-helper = { path = "../helper" }`; it now carries a version too, so this rule can
+# stay strict instead of being relaxed for everyone.
+wildcards = "deny"
+# Nothing is banned outright today. Add a `deny` entry here if a crate has to be kept out of
+# the build.
+
+[licenses]
+# The licenses reached by the Windows graph. The repository is GPL-2.0-only (`LICENSE`,
+# declared once in `[workspace.package]`), so this policy also answers what that code may link
+# against. That answer is a judgement, not a lookup, which is why it is written down:
+#
+#   MIT-0, CC0-1.0            `dunce` (a `CC0-1.0 OR MIT-0 OR Apache-2.0` disjunction)
+#   MIT                       most of the Rust ecosystem
+#   Zlib                      `raw-window-handle`
+#   Unlicense                 `memchr`
+#   Unicode-3.0               the ICU data crates behind `url`/`idna`
+#   Apache-2.0                **the case that needs a decision**: `tao` 0.31 is Apache-2.0-only,
+#                             and the FSF reads Apache-2.0 as incompatible with GPLv2. This
+#                             project already ships builds that link `tao`, so the allowlist
+#                             records the status quo instead of hiding it. It is an open
+#                             licensing question, not a settled one - resolve it deliberately if
+#                             the code is ever redistributed under different terms.
+#   GPL-2.0-only              the three workspace crates
+#
+# Excluded on purpose, and *not* because they are rejected: 0BSD, BSD-2-Clause, BSD-3-Clause,
+# ISC, MPL-2.0 and Apache-2.0 WITH LLVM-exception are present in `Cargo.lock` but not reached by
+# the Windows graph (they belong to the GTK/Cocoa/Android branch). Listing them here would make
+# cargo-deny emit `warning[license-not-encountered]` on every run. The list below is exactly the
+# set the pinned graph reaches - adding an entry nobody needs is a policy decision that was not
+# made.
+allow = [
+    "Apache-2.0",
+    "CC0-1.0",
+    "GPL-2.0-only",
+    "MIT",
+    "MIT-0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+# Anything below this confidence is reported as unlicensed rather than guessed. Lowering it
+# would let a crate whose LICENSE file was detected from a partial match slip through.
+confidence-threshold = 0.9
+
+[sources]
+# Dependencies come from crates.io and nowhere else. A git dependency, or a lock file that
+# points at another registry, fails here.
+#
+# Known limit: `unknown-registry`/`unknown-git` do not police `path` dependencies, so a path
+# dependency outside the workspace is not caught by this check (it would also need the external
+# directory to exist on the runner, which it does not). The workspace's own path dependencies
+# are covered by `cargo check`.
+#
+# To allow a git dependency, add a `[[sources.allow-git]]` entry with the repository URL - and
+# expect the reviewer to ask what happens when that branch disappears.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

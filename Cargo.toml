@@ -2,6 +2,12 @@
 resolver = "2"
 members = ["helper", "hook", "app"]
 
+[workspace.package]
+# The repository LICENSE is GPL-2.0. Declared once here so the three crates cannot
+# drift from it, and so `cargo deny check licenses` sees a license instead of
+# reporting the workspace's own code as unlicensed.
+license = "GPL-2.0-only"
+
 [profile.release]
 opt-level = "s"
 lto = true

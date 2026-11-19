@@ -2,6 +2,7 @@
 name = "brighttray-hook"
 version = "0.1.2"
 edition = "2021"
+license.workspace = true
 
 [lib]
 name = "brighttray_hook"
