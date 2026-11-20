@@ -117,6 +117,33 @@ BrightTray 不会自行重启 Windows 的 shell。如果亮度条仍然不出现
 </details>
 
 <details>
+<summary>点托盘打不开快速设置了</summary>
+
+<br>
+
+带音量、Wi-Fi 磁贴的那个面板是 `ShellHost.exe` 画的，也就是 hook 所在的那个进程。它打不开时，先确认这个进程还活着、没有在反复重启：
+
+```powershell
+Get-Process ShellHost | Select-Object Id, StartTime, Responding
+Get-WinEvent -LogName Application -MaxEvents 40 |
+  Where-Object { $_.Message -match 'ShellHost' } | Select-Object TimeCreated, Id, ProviderName
+```
+
+`StartTime` 一直在变、`Responding = False`，或者事件日志里出现 `Faulting application name: ShellHost.exe`，都说明 shell 在崩。`%TEMP%\brighttray-hook.log` 能看出 hook 有没有跟着走：每次 ShellHost 启动会写一行 `brighttray_hook attached`，短时间内出现一串就是重启循环。
+
+BrightTray 不会再把这个局面弄得更糟。它的 watcher 会统计 ShellHost 的启动次数，两分钟内启动五次就停止注入并报告：
+
+```
+hook watcher: ShellHost.exe started 5 times in 120 s; not injecting the hook
+```
+
+之后 shell 继续运行，只是没有亮度条；两分钟后 watcher 会自己恢复注入。想干脆不装 hook，就在启动 BrightTray（或 `brighttray-helper serve`）前设置 `BRIGHTTRAY_NO_HOOK=1`。
+
+0.2.0 里确实有这个 bug：hook 在 shell 还没初始化完时就去探测某个快速设置槽位，导致每次注入约一秒后 ShellHost 崩溃。0.2.1 去掉了这个探测；还在 0.2.0 的话请升级 —— 注意正在运行的 ShellHost 会一直持有旧 DLL，直到它重启。
+
+</details>
+
+<details>
 <summary>BrightTray 提示缺少 WebView2，但本机已经安装</summary>
 
 <br>

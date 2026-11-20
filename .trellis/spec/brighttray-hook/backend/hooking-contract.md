@@ -92,15 +92,47 @@ and before the first `VirtualProtect`:
    resolve to the same function pointer. A shifted table maps several of our
    slots onto the same neighbour; the error names both slot numbers and the
    shared pointer.
-2. **Probe the safe slots** — `probe_slot()` calls each slot that can be
-   called without side effects (`get_IsEnabled`, `get_IsApplicable`,
-   `get_QuickActionStatus`, `get_QuickActionIsActive` and `GetValue("Value")`)
-   once for real and refuses an `HRESULT` failure. `SetValue` and the
-   `add`/`remove` handler pairs are **not** probed: a probe would change the
-   value or register a handler.
+2. **Probe the safe slots** — `probe_slot()` calls a slot once for real and
+   refuses an `HRESULT` failure. `SetValue` and the `add`/`remove` handler
+   pairs are never probed: a probe would change the value or register a
+   handler. On the `IQuickAction` vtable **nothing is probed at all** — see
+   the section below.
 
 Everything that can fail happens before the first `VirtualProtect`, so a
 refused install leaves the vtable untouched.
+
+## Do not call the `QuickAction` state getters
+
+`probe_slot()` used to probe `get_IsEnabled`, `get_QuickActionStatus`,
+`get_QuickActionIsActive` and `GetValue("Value")` on the brightness
+`QuickSetting` as part of the install. That call is a **crash**, measured on
+Windows 11 26100.9818:
+
+- Every one of those getters, asked of a `QuickSetting` that the install had
+  just created, leaves the object with an unfinished async read. About a
+  second later `QuickActionsDataModel.dll` dereferences the missing result and
+  takes `ShellHost.exe` down with `0xc0000005` at
+  `QuickActionsDataModel.dll+0x2FFDE` — the same offset every time.
+- It is not a race and not a slow machine: with the probes 5 crashes landed in
+  25 s; without them, zero, over the same install path and the same patched
+  vtable. Bisecting one probe at a time: `get_IsApplicable` was the only one
+  that survived, `get_IsEnabled`, `get_QuickActionStatus`,
+  `get_QuickActionIsActive` and `GetValue("Value")` each crashed on their own.
+- It is not the patch either: the crash reproduced with the `IQuickAction`
+  vtable left completely unpatched, and did not reproduce with the
+  `ISettingItem` hook alone (whose probes are still fine and still run).
+
+What pins the table instead: the module-range check, `check_distinct`, and the
+two identity calls (`get_Id` → `SystemSettings_Display_Brightness`,
+`get_FriendlyName` → `Microsoft.QuickAction.Brightness`). Those read slots 7
+and 8, which sit *before* the ten slots we patch, so a table shifted anywhere
+in our range moves them too and the identity check fails. The probes never had
+that power anyway: they only proved a slot answers, not that it is the right
+one.
+
+If you ever want stronger validation, do it on a shell-owned instance *after*
+the shell has initialized it — never on the object the install just created. Do
+not re-add the probes.
 
 ## Get the vtable without a hard-coded address
 

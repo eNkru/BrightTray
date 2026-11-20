@@ -143,6 +143,9 @@ impl App {
             Hook::Starting => json!({ "kind": "starting" }),
             Hook::Event(WatchEvent::Hooked) => json!({ "kind": "hooked" }),
             Hook::Event(WatchEvent::NoShellHost) => json!({ "kind": "waiting" }),
+            Hook::Event(event @ WatchEvent::ShellChurn { .. }) => {
+                json!({ "kind": "error", "message": event.to_string() })
+            }
             Hook::Event(WatchEvent::DllMissing(_)) => json!({ "kind": "missing" }),
             Hook::Event(WatchEvent::Error(message)) => {
                 json!({ "kind": "error", "message": message })

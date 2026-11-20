@@ -26,6 +26,7 @@
 | Caching the brightness instance by address | A freed object's address can be reused by another tile |
 | Doing DDC/CI in the DLL | Two DDC/CI speakers break the command gap; the helper owns the monitor handles |
 | Blocking in a vtable hook | The shell calls these on its UI thread — a blocked call freezes Quick Settings |
+| Probing a `QuickAction` state getter during install | Measured: it corrupts the freshly created `QuickSetting` and crashes `ShellHost` (see [Hooking Contract](./hooking-contract.md#do-not-call-the-quickaction-state-getters)) |
 | Doing work in `DllMain` | The loader lock is held; loading a module or calling COM there deadlocks the shell |
 | A hard-coded RVA or offset | A system update moves it; the exported-function route survives |
 | Removing a validation check to make an install succeed | Better a disabled hook than a crashed shell |
@@ -104,6 +105,11 @@ Then the live check:
    broke.
 7. Restart ShellHost (`taskkill /f /im ShellHost.exe`) — the watcher must
    re-inject, and the log must show it.
+8. Watch the shell for signs of a crash loop: `ShellHost.exe` must keep the same
+   process id while you open and close Quick Settings, and the Application log
+   must stay free of `Faulting application name: ShellHost.exe`. A crashing
+   ShellHost is the one regression this crate must never ship — 0.2.0 shipped
+   it, see the [Hooking Contract](./hooking-contract.md#do-not-call-the-quickaction-state-getters).
 
 ## Review checklist
 
@@ -112,8 +118,11 @@ Then the live check:
 - [ ] Every new vtable hook has a `catch_unwind` wrapper and an original-call
       fallback.
 - [ ] Every new slot is validated with `in_module`, the table passes
-      `check_distinct`, and the safe slots are probed — all before the first
-      `VirtualProtect`.
+      `check_distinct`, and — for the `ISettingItem` vtable only — the safe
+      slots are probed, all before the first `VirtualProtect`.
+- [ ] Nothing new calls a `QuickAction` slot during install. The identity
+      getters (`get_Id`, `get_FriendlyName`) are the only calls allowed, and
+      the reason is in the [Hooking Contract](./hooking-contract.md#do-not-call-the-quickaction-state-getters).
 - [ ] `DllMain` is still three lines.
 - [ ] Nothing blocking happens on the caller's thread.
 - [ ] The `//!` module docs in `lib.rs` still describe the behaviour.
