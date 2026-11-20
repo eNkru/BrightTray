@@ -95,3 +95,30 @@ if last.as_ref() != Some(&event) {
 
 So a missing DLL or a locked-down shell produces one line, not one line per
 poll. The CLI prints them as `hook watcher: {event}`.
+
+## The watcher stops feeding a shell that keeps restarting
+
+`ShellHost.exe` is not supposed to restart while Windows runs. If it does — a
+crash, and the hook is the only third party inside that process — re-injecting
+into every new instance turns one crash into a loop that takes the whole shell
+with it. This really happened in 0.2.0: the hook probed a live
+`QuickAction` slot while the shell was still initializing it, and `ShellHost`
+died about a second later, every time (see the hook package's
+[Hooking Contract](../../brighttray-hook/backend/hooking-contract.md)).
+
+The watcher therefore counts starts (`churn_tripped`):
+
+| Constant | Value | Meaning |
+|----------|-------|---------|
+| `CHURN_LIMIT` | 5 | starts inside the window that mean "loop", not "the user restarted the shell" |
+| `CHURN_WINDOW_MS` | 120 000 | the window those starts are counted over |
+
+Past that limit the watcher reports `WatchEvent::ShellChurn` and stops
+injecting. It does **not** remember the skipped process as hooked, so it
+resumes on its own once the window has passed — a shell that stays up for two
+minutes gets its brightness tile back. The decision itself is a pure function
+with unit tests; keep it pure, because a watcher is not testable.
+
+The false-positive cost is one missing slider for at most two minutes; the
+false-negative cost is an unusable shell. Never "fix" a churn report by
+injecting anyway.

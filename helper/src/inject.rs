@@ -11,7 +11,7 @@
 use std::ffi::c_void;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::core::{s, w, PCWSTR, PWSTR};
 use windows::Win32::Foundation::FILETIME;
@@ -429,6 +429,36 @@ pub fn restart_shellhost() -> Result<(), String> {
     }
 }
 
+/// How many new `ShellHost.exe` processes inside [`CHURN_WINDOW_MS`] mean "the shell is
+/// restarting in a loop", not "the user restarted the shell".
+///
+/// The hook is the only third party inside that process, so a churn loop is assumed to be the
+/// hook's fault: after this many starts the watcher stops injecting, which turns a broken hook
+/// into a missing brightness tile instead of a shell that keeps killing itself.
+const CHURN_LIMIT: usize = 5;
+
+/// The window the churn limit is measured over.
+const CHURN_WINDOW_MS: u64 = 120_000;
+
+/// Milliseconds since this process started. Monotonic, so a clock change cannot make the
+/// watcher believe the shell restarted.
+fn monotonic_ms() -> u64 {
+    static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    EPOCH.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
+/// True when `starts` (monotonic milliseconds of the `ShellHost.exe` processes seen, oldest
+/// first) already contains [`CHURN_LIMIT`] starts inside [`CHURN_WINDOW_MS`] before `now`.
+///
+/// Pure on purpose: the watcher's decision must be testable without a shell to watch.
+fn churn_tripped(starts: &[u64], now: u64) -> bool {
+    starts
+        .iter()
+        .filter(|&&start| now.saturating_sub(start) < CHURN_WINDOW_MS)
+        .count()
+        >= CHURN_LIMIT
+}
+
 /// What the ShellHost watcher observed. Reported only when it changes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WatchEvent {
@@ -436,6 +466,11 @@ pub enum WatchEvent {
     Hooked,
     /// No ShellHost is running right now.
     NoShellHost,
+    /// ShellHost restarted too often to be the user's doing, so nothing is injected any more.
+    ShellChurn {
+        restarts: usize,
+        window_secs: u64,
+    },
     DllMissing(PathBuf),
     Error(String),
 }
@@ -445,6 +480,14 @@ impl std::fmt::Display for WatchEvent {
         match self {
             WatchEvent::Hooked => write!(f, "hook loaded in ShellHost"),
             WatchEvent::NoShellHost => write!(f, "{SHELLHOST} is not running"),
+            WatchEvent::ShellChurn {
+                restarts,
+                window_secs,
+            } => write!(
+                f,
+                "{SHELLHOST} started {restarts} times in {window_secs} s; not injecting the hook \
+                 (a restarted shell should not happen; see the warning in the README)"
+            ),
             WatchEvent::DllMissing(path) => write!(f, "{} not found", path.display()),
             WatchEvent::Error(message) => f.write_str(message),
         }
@@ -472,6 +515,12 @@ pub fn watch_and_inject(dll: PathBuf, report: impl Fn(&WatchEvent) + Send + 'sta
         // pid -> creation time of the process that has the hook.
         let mut hooked: std::collections::HashMap<u32, Option<u64>> =
             std::collections::HashMap::new();
+        // Monotonic milliseconds of every `ShellHost.exe` start this watcher has seen, oldest
+        // first. Trimmed to the churn window on every tick.
+        let mut starts: Vec<u64> = Vec::new();
+        // Identity (pid, creation time) of the last process that counted as a start, so a
+        // single long-lived shell does not look like a restart on every tick.
+        let mut counted: Option<(u32, Option<u64>)> = None;
         let mut last: Option<WatchEvent> = None;
 
         loop {
@@ -483,13 +532,27 @@ pub fn watch_and_inject(dll: PathBuf, report: impl Fn(&WatchEvent) + Send + 'sta
             } else if pids.is_empty() {
                 WatchEvent::NoShellHost
             } else {
+                let now = monotonic_ms();
+                starts.retain(|start| now.saturating_sub(*start) < CHURN_WINDOW_MS);
+
                 let mut error = None;
                 for &pid in &pids {
                     // A pid alone does not identify a process: a restarted ShellHost may get
                     // the pid of the old one, and then it is a different process that does
                     // not have the hook.
                     let created = process_creation(pid);
+                    if counted != Some((pid, created)) {
+                        counted = Some((pid, created));
+                        starts.push(now);
+                    }
                     if hooked.get(&pid) == Some(&created) {
+                        continue;
+                    }
+                    // The shell is restarting in a loop. The hook is the only third party in
+                    // that process, so stop feeding it: no brightness tile beats a shell that
+                    // keeps taking itself down. Deliberately *not* remembered as hooked, so
+                    // the watcher resumes on its own once the churn window has passed.
+                    if churn_tripped(&starts, now) {
                         continue;
                     }
                     if module_loaded(pid, &name) {
@@ -510,7 +573,14 @@ pub fn watch_and_inject(dll: PathBuf, report: impl Fn(&WatchEvent) + Send + 'sta
                         }
                     }
                 }
-                error.map_or(WatchEvent::Hooked, WatchEvent::Error)
+                if error.is_none() && churn_tripped(&starts, now) {
+                    WatchEvent::ShellChurn {
+                        restarts: starts.len(),
+                        window_secs: CHURN_WINDOW_MS / 1000,
+                    }
+                } else {
+                    error.map_or(WatchEvent::Hooked, WatchEvent::Error)
+                }
             };
 
             if last.as_ref() != Some(&event) {
@@ -532,6 +602,46 @@ mod tests {
     /// The directory must come from Windows, not from a literal: the test checks that it exists
     /// and that the shell is looked up inside it. `ShellHost.exe` itself is not asserted on —
     /// the Windows CI runner is a Server image, where the shell host may be absent.
+    #[test]
+    fn four_restarts_in_the_window_are_tolerated() {
+        let starts = [1_000, 2_000, 3_000, 4_000];
+        assert!(!churn_tripped(&starts, 5_000));
+    }
+
+    #[test]
+    fn five_restarts_in_the_window_trip_the_watcher() {
+        let starts = [1_000, 2_000, 3_000, 4_000, 5_000];
+        assert!(churn_tripped(&starts, 5_500));
+    }
+
+    #[test]
+    fn restarts_older_than_the_window_do_not_count() {
+        // Three long ago plus two now: a shell that restarted once yesterday and twice today is
+        // not churning.
+        let starts = [
+            0,
+            1_000,
+            2_000,
+            CHURN_WINDOW_MS + 1_000,
+            CHURN_WINDOW_MS + 2_000,
+        ];
+        assert!(!churn_tripped(&starts, CHURN_WINDOW_MS + 3_000));
+    }
+
+    #[test]
+    fn no_starts_is_not_churn() {
+        assert!(!churn_tripped(&[], 0));
+        assert!(!churn_tripped(&[], u64::MAX));
+    }
+
+    #[test]
+    fn a_window_edge_is_inside_the_window() {
+        // `now - start == CHURN_WINDOW_MS` is still inside: the window is half-open.
+        let starts = [0, 1, 2, 3, 4];
+        assert!(churn_tripped(&starts, CHURN_WINDOW_MS - 1));
+        assert!(!churn_tripped(&starts, CHURN_WINDOW_MS));
+    }
+
     #[test]
     fn system_directory_is_the_loader_directory() {
         let dir = system_directory().expect("GetSystemDirectoryW");
