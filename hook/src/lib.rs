@@ -25,6 +25,15 @@
 //! and identified by FriendlyName, so no RVA or PDB is needed here either.
 //!
 //! If any check fails the DLL does nothing, which is safe for ShellHost.
+//!
+//! One check that must *not* come back: calling the state getters (`get_IsEnabled`,
+//! `get_QuickActionStatus`, `get_QuickActionIsActive`, `GetValue`) on the freshly created
+//! brightness `QuickSetting`, as `probe_slot` used to do. Measured on Windows 11 26100.9818:
+//! every such call leaves that object with an unfinished async read, and about a second later
+//! `QuickActionsDataModel.dll` dereferences the missing result and takes ShellHost down with an
+//! access violation at `QuickActionsDataModel.dll+0x2FFDE` - reproducibly, in a restart loop
+//! (5 crashes in 25 s), with `siHost` restarting ShellHost each time. `get_IsApplicable` was
+//! the only slot that survived the probe, and only the identity getters are called today.
 
 mod pipe;
 
@@ -970,10 +979,8 @@ fn in_module(pointer: usize, base: usize, size: usize) -> bool {
 /// The shape of a probe: what the slot under test is expected to answer with.
 #[derive(Clone, Copy)]
 enum SlotProbe {
-    /// `get_IsEnabled` / `get_IsApplicable` / `get_QuickActionIsActive`: a bool out-parameter.
+    /// `get_IsEnabled` / `get_IsApplicable`: a bool out-parameter.
     Flag,
-    /// `get_QuickActionStatus`: an `IInspectable` the caller owns.
-    Status,
     /// `GetValue(name, out)`: an `IInspectable` the caller owns, asked for `"Value"`.
     Value,
 }
@@ -1016,21 +1023,6 @@ unsafe fn probe_slot(
             if hr.is_err() {
                 return Err(format!(
                     "slot {slot} did not answer (bool) -> 0x{:08X}",
-                    hr.0 as u32
-                ));
-            }
-        }
-        SlotProbe::Status => {
-            let function: GetIdFn = std::mem::transmute(pointer);
-            let mut out: *mut c_void = std::ptr::null_mut();
-            let hr = function(this, &mut out);
-            if hr.is_ok() && !out.is_null() {
-                // The status is an IInspectable; wrapping it takes the caller's reference.
-                let _ = IInspectable::from_raw(out);
-            }
-            if hr.is_err() {
-                return Err(format!(
-                    "slot {slot} did not answer (status) -> 0x{:08X}",
                     hr.0 as u32
                 ));
             }
@@ -1178,13 +1170,13 @@ unsafe fn try_install_quick_actions() -> Result<(), String> {
         *pair = (slot, pointer);
     }
     // Every pointer is inside the module, but a shifted table lands several slots on one
-    // function. Refuse that, and probe the slots that are safe to call, before patching.
+    // function. Refuse that before patching.
+    //
+    // Nothing is probed on this vtable, and that is not an oversight - see "Do not call the
+    // QuickAction slots" below. The identity checks (`get_Id`, `get_FriendlyName`) are what
+    // pins this table: they read slots 7 and 8, which sit *before* the ten slots patched
+    // here, so a table shifted anywhere in our range moves them too and the check fails.
     check_distinct(&table)?;
-    probe_slot(action, vtable, QA_SLOT_IS_APPLICABLE, SlotProbe::Flag)?;
-    probe_slot(action, vtable, QA_SLOT_IS_ENABLED, SlotProbe::Flag)?;
-    probe_slot(action, vtable, QA_SLOT_STATUS, SlotProbe::Status)?;
-    probe_slot(action, vtable, QA_SLOT_IS_ACTIVE, SlotProbe::Flag)?;
-    probe_slot(action, vtable, QA_SLOT_GET_VALUE, SlotProbe::Value)?;
 
     let get_id: GetIdFn = std::mem::transmute(*vtable.add(QA_SLOT_GET_ID));
     let mut returned_id: *mut c_void = std::ptr::null_mut();
