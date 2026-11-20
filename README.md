@@ -118,6 +118,33 @@ BrightTray never restarts Windows' shell on its own. If the slider still does no
 </details>
 
 <details>
+<summary>Clicking the tray does not open Quick Settings any more</summary>
+
+<br>
+
+The panel with the volume and Wi-Fi tiles is drawn by `ShellHost.exe` — the same process the hook lives in. When it stops opening, the first question is whether that process is still alive or restarting in a loop:
+
+```powershell
+Get-Process ShellHost | Select-Object Id, StartTime, Responding
+Get-WinEvent -LogName Application -MaxEvents 40 |
+  Where-Object { $_.Message -match 'ShellHost' } | Select-Object TimeCreated, Id, ProviderName
+```
+
+A changing `StartTime`, `Responding = False`, or `Faulting application name: ShellHost.exe` entries mean the shell is being taken down. `%TEMP%\brighttray-hook.log` shows whether the hook went along for the ride: one `brighttray_hook attached` line per ShellHost start, so a burst of them is a restart loop.
+
+BrightTray refuses to make that worse. Its watcher counts ShellHost starts, and after five starts inside two minutes it stops injecting and reports
+
+```
+hook watcher: ShellHost.exe started 5 times in 120 s; not injecting the hook
+```
+
+The shell then keeps running without a brightness slider, and the watcher resumes on its own two minutes later. If you would rather keep the hook out entirely, start BrightTray (or `brighttray-helper serve`) with `BRIGHTTRAY_NO_HOOK=1`.
+
+In 0.2.0 this was a real bug: the hook probed a Quick Settings slot while the shell was still initializing it, and ShellHost crashed about a second after every injection. 0.2.1 removed the probe; if you are on 0.2.0, update — and note that the running ShellHost keeps the old DLL until it restarts.
+
+</details>
+
+<details>
 <summary>BrightTray says WebView2 is missing, but it is installed</summary>
 
 <br>
